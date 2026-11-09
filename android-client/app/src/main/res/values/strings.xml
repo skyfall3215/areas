@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">İkinci Ekran</string>
+    <string name="btn_connect_usb">USB ile Bağlan</string>
+    <string name="status_disconnected">Bağlantı Yok</string>
+    <string name="status_connecting">Bağlanıyor (127.0.0.1:27183)...</string>
+    <string name="status_connected">Bağlandı (Yayın Aktif)</string>
+    <string name="status_error">Bağlantı koptu. Kabloyu ve USB hata ayıklamayı kontrol edin.</string>
+</resources>
+

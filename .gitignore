@@ -1,0 +1,27 @@
+# Android / Gradle
+.gradle/
+.kotlin/
+build/
+local.properties
+*.apk
+*.aab
+*.jks
+*.keystore
+.idea/
+
+# .NET
+bin/
+obj/
+.vs/
+*.user
+
+# Secrets
+.env
+.env.*
+*.pem
+*.key
+
+# Generated / misc
+graphify-out/
+node_modules/
+*.log

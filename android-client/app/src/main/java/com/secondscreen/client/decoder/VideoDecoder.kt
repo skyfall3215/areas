@@ -1,0 +1,90 @@
+package com.secondscreen.client.decoder
+
+import android.media.MediaCodec
+import android.media.MediaFormat
+import android.os.Build
+import android.util.Log
+import android.view.Surface
+import java.nio.ByteBuffer
+
+class VideoDecoder(private val surface: Surface) : AutoCloseable {
+
+    companion object {
+        private const val TAG = "VideoDecoder"
+        private const val MIME_TYPE = "video/avc"
+    }
+
+    private var codec: MediaCodec? = null
+    private var isConfigured = false
+    private val bufferInfo = MediaCodec.BufferInfo()
+
+    fun configure(width: Int, height: Int, spsPpsData: ByteArray) {
+        close()
+
+        try {
+            val format = MediaFormat.createVideoFormat(MIME_TYPE, width, height)
+            format.setByteBuffer("csd-0", ByteBuffer.wrap(spsPpsData))
+
+            // Low-Latency Flags
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
+            }
+            try {
+                format.setInteger("vendor.qti-ext-dec-low-latency.enable", 1)
+            } catch (_: Exception) {}
+            try {
+                format.setInteger("vendor.rtc-ext-dec-low-latency.enable", 1)
+            } catch (_: Exception) {}
+
+            val decoder = MediaCodec.createDecoderByType(MIME_TYPE)
+            decoder.configure(format, surface, null, 0)
+            decoder.start()
+            codec = decoder
+            isConfigured = true
+            Log.i(TAG, "MediaCodec AVC low-latency decoder started: ${width}x${height}")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to initialize MediaCodec decoder", e)
+            close()
+            throw e
+        }
+    }
+
+    fun decodeFrame(nalData: ByteArray, ptsUs: Long, isKeyframe: Boolean) {
+        val decoder = codec ?: return
+        if (!isConfigured) return
+
+        try {
+            val inIndex = decoder.dequeueInputBuffer(10_000)
+            if (inIndex >= 0) {
+                val inputBuffer = decoder.getInputBuffer(inIndex)
+                if (inputBuffer != null) {
+                    inputBuffer.clear()
+                    inputBuffer.put(nalData)
+                    val flags = if (isKeyframe) MediaCodec.BUFFER_FLAG_KEY_FRAME else 0
+                    decoder.queueInputBuffer(inIndex, 0, nalData.size, ptsUs, flags)
+                }
+            }
+
+            // Immediately drain outputs to surface
+            var outIndex = decoder.dequeueOutputBuffer(bufferInfo, 0)
+            while (outIndex >= 0) {
+                decoder.releaseOutputBuffer(outIndex, true) // true = render to surface
+                outIndex = decoder.dequeueOutputBuffer(bufferInfo, 0)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Decode frame error", e)
+        }
+    }
+
+    override fun close() {
+        isConfigured = false
+        try {
+            codec?.stop()
+        } catch (_: Exception) {}
+        try {
+            codec?.release()
+        } catch (_: Exception) {}
+        codec = null
+    }
+}
+

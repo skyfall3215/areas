@@ -1,0 +1,50 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{062557FC-906C-497C-AD2C-D448CC99EE99}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SecondScreen.Core", "src\SecondScreen.Core\SecondScreen.Core.csproj", "{BAE81E4F-AD96-4F4A-8780-C403DB2018AB}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{798FFAB4-C363-407A-A614-F6B93CAD51E1}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SecondScreen.Tests", "tests\SecondScreen.Tests\SecondScreen.Tests.csproj", "{72986FF4-3B4E-4603-B7F6-7C919301F17E}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SecondScreen.Media", "src\SecondScreen.Media\SecondScreen.Media.csproj", "{EF666D94-7021-44F1-B028-DDB171156599}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SecondScreen.App", "src\SecondScreen.App\SecondScreen.App.csproj", "{F6DDE47C-C7A8-47E6-8EEA-C9E6488DA9EB}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{BAE81E4F-AD96-4F4A-8780-C403DB2018AB}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BAE81E4F-AD96-4F4A-8780-C403DB2018AB}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BAE81E4F-AD96-4F4A-8780-C403DB2018AB}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BAE81E4F-AD96-4F4A-8780-C403DB2018AB}.Release|Any CPU.Build.0 = Release|Any CPU
+		{72986FF4-3B4E-4603-B7F6-7C919301F17E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{72986FF4-3B4E-4603-B7F6-7C919301F17E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{72986FF4-3B4E-4603-B7F6-7C919301F17E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{72986FF4-3B4E-4603-B7F6-7C919301F17E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{EF666D94-7021-44F1-B028-DDB171156599}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{EF666D94-7021-44F1-B028-DDB171156599}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{EF666D94-7021-44F1-B028-DDB171156599}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{EF666D94-7021-44F1-B028-DDB171156599}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F6DDE47C-C7A8-47E6-8EEA-C9E6488DA9EB}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F6DDE47C-C7A8-47E6-8EEA-C9E6488DA9EB}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F6DDE47C-C7A8-47E6-8EEA-C9E6488DA9EB}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F6DDE47C-C7A8-47E6-8EEA-C9E6488DA9EB}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{BAE81E4F-AD96-4F4A-8780-C403DB2018AB} = {062557FC-906C-497C-AD2C-D448CC99EE99}
+		{72986FF4-3B4E-4603-B7F6-7C919301F17E} = {798FFAB4-C363-407A-A614-F6B93CAD51E1}
+		{EF666D94-7021-44F1-B028-DDB171156599} = {062557FC-906C-497C-AD2C-D448CC99EE99}
+		{F6DDE47C-C7A8-47E6-8EEA-C9E6488DA9EB} = {062557FC-906C-497C-AD2C-D448CC99EE99}
+	EndGlobalSection
+EndGlobal
