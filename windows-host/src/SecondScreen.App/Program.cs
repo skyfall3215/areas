@@ -2,11 +2,13 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
+using System.Threading.Channels;
 using SecondScreen.Core.Diagnostics;
 using SecondScreen.Core.Protocol;
 using SecondScreen.Core.Transport;
 using SecondScreen.Media.Capture;
 using SecondScreen.Media.Encoding;
+using SecondScreen.Network;
 
 namespace SecondScreen.App;
 
@@ -42,7 +44,7 @@ public static class Program
         };
 
         Console.WriteLine("=================================================");
-        Console.WriteLine(" SecondScreen Windows Host - Aşama 2 (Gecikme)");
+        Console.WriteLine(" SecondScreen Windows Host - Aşama 3 (Wi-Fi LAN + USB)");
         Console.WriteLine("=================================================");
         Console.WriteLine();
 
@@ -74,8 +76,8 @@ public static class Program
         Console.WriteLine("[İPUCU] Uçtan uca gecikmeyi kamera ile ölçmek için 'T' tuşuna basın (Kronometre açılır).");
         Console.WriteLine();
 
-        // 1. ADB Reverse
-        Console.WriteLine("[1/3] adb reverse yapılandırılıyor...");
+        // 1. ADB Reverse (USB-C Mode)
+        Console.WriteLine("[1/4] USB tüneli (adb reverse) kontrol ediliyor...");
         var (adbSuccess, adbMessage) = await AdbHelper.ReversePortAsync(ProtocolConstants.DefaultPort, Cts.Token);
         if (adbSuccess)
         {
@@ -84,16 +86,38 @@ public static class Program
         else
         {
             Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.WriteLine($"[UYARI] {adbMessage}");
-            Console.WriteLine("Tablet USB kablosu takılı değilse veya yetkilendirilmemişse kabloyu kontrol edin.");
+            Console.WriteLine($"[BİLGİ] {adbMessage}");
+            Console.WriteLine("USB kablosu takılı değilse Wi-Fi LAN modunu kullanabilirsiniz.");
             Console.ResetColor();
         }
 
-        // 2. Start TCP Listener
-        var listener = new TcpListener(IPAddress.Loopback, ProtocolConstants.DefaultPort);
+        // 2. Discover local IP addresses for Wi-Fi LAN
+        var localIps = NetworkHelper.GetLocalIPv4Addresses();
+        Console.WriteLine("[2/4] Yerel Ağ (Wi-Fi LAN) adresleri:");
+        if (localIps.Count == 0)
+        {
+            Console.WriteLine("      (Etkin yerel ağ adaptörü bulunamadı)");
+        }
+        else
+        {
+            foreach (var ip in localIps)
+            {
+                Console.ForegroundColor = ConsoleColor.Cyan;
+                Console.WriteLine($"      -> IP: {ip} (Port: {ProtocolConstants.DefaultPort})");
+                Console.ResetColor();
+            }
+        }
+
+        // 3. Start UDP Discovery Broadcaster
+        using var broadcaster = new LanDiscoveryBroadcaster();
+        broadcaster.Start();
+        Console.WriteLine($"[3/4] UDP Keşif Yayını (Port: {ProtocolConstants.DiscoveryPort}) başlatıldı.");
+
+        // 4. Start TCP Listener on all interfaces (0.0.0.0)
+        var listener = new TcpListener(IPAddress.Any, ProtocolConstants.DefaultPort);
         listener.Start();
-        Console.WriteLine($"[2/3] Sunucu 127.0.0.1:{ProtocolConstants.DefaultPort} üzerinde dinliyor...");
-        Console.WriteLine("[3/3] Android tablet alıcı bağlantısı bekleniyor (Ctrl+C ile çıkış)...");
+        Console.WriteLine($"[4/4] Sunucu 0.0.0.0:{ProtocolConstants.DefaultPort} üzerinde dinliyor (USB + Wi-Fi)...");
+        Console.WriteLine("Android tablet bağlantısı bekleniyor (Ctrl+C ile çıkış)...");
         Console.WriteLine();
 
         while (!Cts.Token.IsCancellationRequested)
@@ -101,8 +125,18 @@ public static class Program
             try
             {
                 using var tcpClient = await listener.AcceptTcpClientAsync(Cts.Token);
+                var remoteEp = tcpClient.Client.RemoteEndPoint?.ToString() ?? "Bilinmiyor";
+                bool isUsb = remoteEp.StartsWith("127.0.0.1") || remoteEp.StartsWith("[::1]");
+
                 Console.ForegroundColor = ConsoleColor.Green;
-                Console.WriteLine($"[+] Tablet bağlandı: {tcpClient.Client.RemoteEndPoint}");
+                if (isUsb)
+                {
+                    Console.WriteLine($"[+] Tablet bağlandı: {remoteEp} [Mod: USB-C (adb reverse)]");
+                }
+                else
+                {
+                    Console.WriteLine($"[+] Tablet bağlandı: {remoteEp} [Mod: Wi-Fi LAN]");
+                }
                 Console.ResetColor();
 
                 await HandleClientSessionAsync(tcpClient, Cts.Token);
@@ -271,7 +305,36 @@ public static class Program
             catch (Exception) { }
         }, sessionCts.Token);
 
-        // 7. Video Streaming Loop
+        // 7. Decoupled Video Sender Task (Buffer 4 frames for jitter; auto-heals with IDR keyframe on backlog)
+        var videoChannel = Channel.CreateBounded<(FrameHeader Header, byte[] Payload)>(
+            new BoundedChannelOptions(4)
+            {
+                FullMode = BoundedChannelFullMode.DropOldest,
+                SingleReader = true,
+                SingleWriter = true
+            });
+
+        var videoSenderTask = Task.Run(async () =>
+        {
+            try
+            {
+                var reader = videoChannel.Reader;
+                while (await reader.WaitToReadAsync(sessionCts.Token).ConfigureAwait(false))
+                {
+                    while (reader.TryRead(out var item))
+                    {
+                        await transport.SendPacketAsync(item.Header, item.Payload, sessionCts.Token).ConfigureAwait(false);
+                    }
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex)
+            {
+                sessionCts.Cancel();
+            }
+        }, sessionCts.Token);
+
+        // 8. Video Capture and Encoding Loop (Solid 60.0 FPS)
         uint frameNumber = 0;
         bool configSent = false;
         var stopwatch = Stopwatch.StartNew();
@@ -339,7 +402,7 @@ public static class Program
                         configSent = true;
                     }
 
-                    // Send VIDEO_FRAME
+                    // Push VIDEO_FRAME to decoupled queue
                     var frameMsg = new VideoFrameMessage(
                         FrameNumber: ++frameNumber,
                         CaptureDurationUs: captureDurationUs,
@@ -357,7 +420,12 @@ public static class Program
                         timestampUs: (uint)frameStartUs,
                         flags: frameMsg.GetFlags());
 
-                    await transport.SendPacketAsync(frameHeader, framePayload, sessionCts.Token);
+                    if (videoChannel.Reader.Count >= 2)
+                    {
+                        encoder.RequestKeyframe();
+                    }
+
+                    videoChannel.Writer.TryWrite((frameHeader, framePayload));
                 }
 
                 // High-precision frame rate pacing (solid 60.0 FPS)
@@ -384,6 +452,8 @@ public static class Program
         }
         finally
         {
+            videoChannel.Writer.TryComplete();
+            try { await videoSenderTask; } catch { }
             sessionCts.Cancel();
             try { await Task.WhenAll(receiveTask, pingTask); } catch { }
             Console.WriteLine($"[-] Tablet bağlantısı sonlandı. Toplam gönderilen kare: {frameNumber}");

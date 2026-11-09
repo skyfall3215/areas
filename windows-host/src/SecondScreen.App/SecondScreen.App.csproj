@@ -3,6 +3,7 @@
   <ItemGroup>
     <ProjectReference Include="..\SecondScreen.Core\SecondScreen.Core.csproj" />
     <ProjectReference Include="..\SecondScreen.Media\SecondScreen.Media.csproj" />
+    <ProjectReference Include="..\SecondScreen.Network\SecondScreen.Network.csproj" />
   </ItemGroup>
 
   <PropertyGroup>

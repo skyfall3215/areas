@@ -9,11 +9,16 @@ import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.SocketTimeoutException
+
+class ClientIsolationException(
+    message: String = "Ağ cihazlar arası iletişimi engelliyor olabilir (Yurt/Okul Wi-Fi). Lütfen USB veya Mobil Etkin Nokta modunu seçin."
+) : Exception(message)
 
 class SocketTransport(
-    private val host: String = "127.0.0.1",
-    private val port: Int = 27183,
-    private val connectTimeoutMs: Int = 3000
+    val host: String = "127.0.0.1",
+    val port: Int = 27183,
+    private val connectTimeoutMs: Int = 2500
 ) : ITransport {
 
     private var socket: Socket? = null
@@ -26,12 +31,25 @@ class SocketTransport(
     suspend fun connect() = withContext(Dispatchers.IO) {
         val s = Socket()
         s.tcpNoDelay = true
-        s.sendBufferSize = 64 * 1024
-        s.receiveBufferSize = 64 * 1024
-        s.connect(InetSocketAddress(host, port), connectTimeoutMs)
+        s.sendBufferSize = 512 * 1024
+        s.receiveBufferSize = 512 * 1024
+
+        try {
+            s.connect(InetSocketAddress(host, port), connectTimeoutMs)
+        } catch (e: SocketTimeoutException) {
+            s.close()
+            if (isLanHost(host)) {
+                throw ClientIsolationException()
+            }
+            throw e
+        } catch (e: Exception) {
+            s.close()
+            throw e
+        }
+
         socket = s
-        inputStream = BufferedInputStream(s.getInputStream(), 64 * 1024)
-        outputStream = BufferedOutputStream(s.getOutputStream(), 64 * 1024)
+        inputStream = BufferedInputStream(s.getInputStream(), 512 * 1024)
+        outputStream = BufferedOutputStream(s.getOutputStream(), 512 * 1024)
     }
 
     override suspend fun sendPacket(header: FrameHeader, payload: ByteArray) = withContext(Dispatchers.IO) {
@@ -52,5 +70,8 @@ class SocketTransport(
         inputStream = null
         outputStream = null
     }
-}
 
+    private fun isLanHost(h: String): Boolean {
+        return h != "127.0.0.1" && h != "localhost" && h != "::1"
+    }
+}

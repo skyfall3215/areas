@@ -16,6 +16,7 @@ public sealed class MfH264Encoder : IDisposable
     private static readonly Guid ForceKeyframeGuid = new("398c1b98-8353-475a-9e28-13306d773018");
 
     private IMFTransform? _encoder;
+    private ICodecAPI? _codecApi;
     private IMFMediaType? _inType;
     private IMFMediaType? _outType;
     private int _width;
@@ -85,6 +86,30 @@ public sealed class MfH264Encoder : IDisposable
         // Set low-latency mode attribute on encoder
         _encoder.Attributes?.Set(LowLatencyGuid, 1);
 
+        // Configure ICodecAPI (Hardware Low Latency, 0 B-frames, CBR Rate Control)
+        try
+        {
+            var pUnk = _encoder.NativePointer;
+            if (pUnk != IntPtr.Zero)
+            {
+                var codecApi = Marshal.GetObjectForIUnknown(pUnk) as ICodecAPI;
+                if (codecApi != null)
+                {
+                    _codecApi = codecApi;
+                    CodecApiGuids.TrySet(_codecApi, CodecApiGuids.LowLatencyMode, true);
+                    CodecApiGuids.TrySet(_codecApi, CodecApiGuids.DefaultBPictureCount, (uint)0); // NO B-FRAMES
+                    CodecApiGuids.TrySet(_codecApi, CodecApiGuids.RateControlMode, (uint)0); // CBR
+                    CodecApiGuids.TrySet(_codecApi, CodecApiGuids.MeanBitRate, (uint)_bitrateBps);
+                    CodecApiGuids.TrySet(_codecApi, CodecApiGuids.MaxBitRate, (uint)(_bitrateBps * 12 / 10));
+                    uint bufSize = (uint)(_bitrateBps / 8 / _fps * 2);
+                    CodecApiGuids.TrySet(_codecApi, CodecApiGuids.BufferSize, bufSize);
+                    CodecApiGuids.TrySet(_codecApi, CodecApiGuids.AdaptiveMode, (uint)0);
+                    CodecApiGuids.TrySet(_codecApi, CodecApiGuids.GopSize, (uint)60); // 1 keyframe per second
+                }
+            }
+        }
+        catch { }
+
         // Configure output MediaType
         _outType = MediaFactory.MFCreateMediaType();
         _outType.Set(MediaTypeAttributeKeys.MajorType, MediaTypeGuids.Video);
@@ -139,6 +164,10 @@ public sealed class MfH264Encoder : IDisposable
 
         if (_requestKeyframe)
         {
+            if (_codecApi != null)
+            {
+                CodecApiGuids.TrySet(_codecApi, CodecApiGuids.ForceKeyframe, (uint)1);
+            }
             _encoder.Attributes?.Set(ForceKeyframeGuid, 1);
             _requestKeyframe = false;
         }
@@ -267,6 +296,7 @@ public sealed class MfH264Encoder : IDisposable
                 _encoder.Dispose();
                 _encoder = null;
             }
+            _codecApi = null;
             _inType?.Dispose();
             _inType = null;
             _outType?.Dispose();

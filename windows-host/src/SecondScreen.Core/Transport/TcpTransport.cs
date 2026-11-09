@@ -14,8 +14,8 @@ public sealed class TcpTransport : ITransport
     {
         _client = client ?? throw new ArgumentNullException(nameof(client));
         _client.NoDelay = true;
-        _client.SendBufferSize = 64 * 1024;
-        _client.ReceiveBufferSize = 64 * 1024;
+        _client.SendBufferSize = 512 * 1024;
+        _client.ReceiveBufferSize = 512 * 1024;
         _stream = _client.GetStream();
     }
 

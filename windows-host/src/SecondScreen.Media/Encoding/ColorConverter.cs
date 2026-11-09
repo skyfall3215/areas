@@ -28,73 +28,83 @@ public static class ColorConverter
         int ySize = width * height;
         int uvOffset = ySize;
 
+        int totalPairs = height / 2;
+        int numThreads = Math.Clamp(Environment.ProcessorCount, 2, 8);
+        int chunkSize = (totalPairs + numThreads - 1) / numThreads;
+
         fixed (byte* pBgra = bgra)
         fixed (byte* pNv12 = nv12)
         {
             byte* src = pBgra;
             byte* dst = pNv12;
 
-            // Process 2 rows at a time in parallel
-            Parallel.For(0, height / 2, yHalf =>
+            // Process chunks across CPU worker threads (zero task allocation overhead)
+            Parallel.For(0, numThreads, threadIdx =>
             {
-                int y0 = yHalf * 2;
-                int y1 = y0 + 1;
+                int startPair = threadIdx * chunkSize;
+                int endPair = Math.Min(startPair + chunkSize, totalPairs);
 
-                int row0Offset = y0 * width * 4;
-                int row1Offset = y1 * width * 4;
-
-                int yDst0 = y0 * width;
-                int yDst1 = y1 * width;
-                int uvDst = uvOffset + (yHalf * width);
-
-                for (int x = 0; x < width; x += 2)
+                for (int yHalf = startPair; yHalf < endPair; yHalf++)
                 {
-                    int x0 = x;
-                    int x1 = x + 1;
+                    int y0 = yHalf * 2;
+                    int y1 = y0 + 1;
 
-                    // Pixel (x0, y0)
-                    int i00 = row0Offset + (x0 * 4);
-                    byte b00 = src[i00];
-                    byte g00 = src[i00 + 1];
-                    byte r00 = src[i00 + 2];
+                    int row0Offset = y0 * width * 4;
+                    int row1Offset = y1 * width * 4;
 
-                    // Pixel (x1, y0)
-                    int i10 = row0Offset + (x1 * 4);
-                    byte b10 = src[i10];
-                    byte g10 = src[i10 + 1];
-                    byte r10 = src[i10 + 2];
+                    int yDst0 = y0 * width;
+                    int yDst1 = y1 * width;
+                    int uvDst = uvOffset + (yHalf * width);
 
-                    // Pixel (x0, y1)
-                    int i01 = row1Offset + (x0 * 4);
-                    byte b01 = src[i01];
-                    byte g01 = src[i01 + 1];
-                    byte r01 = src[i01 + 2];
+                    for (int x = 0; x < width; x += 2)
+                    {
+                        int x0 = x;
+                        int x1 = x + 1;
 
-                    // Pixel (x1, y1)
-                    int i11 = row1Offset + (x1 * 4);
-                    byte b11 = src[i11];
-                    byte g11 = src[i11 + 1];
-                    byte r11 = src[i11 + 2];
+                        // Pixel (x0, y0)
+                        int i00 = row0Offset + (x0 * 4);
+                        byte b00 = src[i00];
+                        byte g00 = src[i00 + 1];
+                        byte r00 = src[i00 + 2];
 
-                    // Rec. 601 coefficients
-                    // Y = 0.299R + 0.587G + 0.114B
-                    dst[yDst0 + x0] = (byte)(((66 * r00 + 129 * g00 + 25 * b00 + 128) >> 8) + 16);
-                    dst[yDst0 + x1] = (byte)(((66 * r10 + 129 * g10 + 25 * b10 + 128) >> 8) + 16);
-                    dst[yDst1 + x0] = (byte)(((66 * r01 + 129 * g01 + 25 * b01 + 128) >> 8) + 16);
-                    dst[yDst1 + x1] = (byte)(((66 * r11 + 129 * g11 + 25 * b11 + 128) >> 8) + 16);
+                        // Pixel (x1, y0)
+                        int i10 = row0Offset + (x1 * 4);
+                        byte b10 = src[i10];
+                        byte g10 = src[i10 + 1];
+                        byte r10 = src[i10 + 2];
 
-                    // Average 2x2 block for U and V
-                    int rAvg = (r00 + r10 + r01 + r11) >> 2;
-                    int gAvg = (g00 + g10 + g01 + g11) >> 2;
-                    int bAvg = (b00 + b10 + b01 + b11) >> 2;
+                        // Pixel (x0, y1)
+                        int i01 = row1Offset + (x0 * 4);
+                        byte b01 = src[i01];
+                        byte g01 = src[i01 + 1];
+                        byte r01 = src[i01 + 2];
 
-                    // U = -0.169R - 0.331G + 0.500B + 128
-                    // V = 0.500R - 0.419G - 0.081B + 128
-                    byte u = (byte)(((-38 * rAvg - 74 * gAvg + 112 * bAvg + 128) >> 8) + 128);
-                    byte v = (byte)(((112 * rAvg - 94 * gAvg - 18 * bAvg + 128) >> 8) + 128);
+                        // Pixel (x1, y1)
+                        int i11 = row1Offset + (x1 * 4);
+                        byte b11 = src[i11];
+                        byte g11 = src[i11 + 1];
+                        byte r11 = src[i11 + 2];
 
-                    dst[uvDst + x0] = u;
-                    dst[uvDst + x1] = v;
+                        // Rec. 601 coefficients
+                        // Y = 0.299R + 0.587G + 0.114B
+                        dst[yDst0 + x0] = (byte)(((66 * r00 + 129 * g00 + 25 * b00 + 128) >> 8) + 16);
+                        dst[yDst0 + x1] = (byte)(((66 * r10 + 129 * g10 + 25 * b10 + 128) >> 8) + 16);
+                        dst[yDst1 + x0] = (byte)(((66 * r01 + 129 * g01 + 25 * b01 + 128) >> 8) + 16);
+                        dst[yDst1 + x1] = (byte)(((66 * r11 + 129 * g11 + 25 * b11 + 128) >> 8) + 16);
+
+                        // Average 2x2 block for U and V
+                        int rAvg = (r00 + r10 + r01 + r11) >> 2;
+                        int gAvg = (g00 + g10 + g01 + g11) >> 2;
+                        int bAvg = (b00 + b10 + b01 + b11) >> 2;
+
+                        // U = -0.169R - 0.331G + 0.500B + 128
+                        // V = 0.500R - 0.419G - 0.081B + 128
+                        byte u = (byte)(((-38 * rAvg - 74 * gAvg + 112 * bAvg + 128) >> 8) + 128);
+                        byte v = (byte)(((112 * rAvg - 94 * gAvg - 18 * bAvg + 128) >> 8) + 128);
+
+                        dst[uvDst + x0] = u;
+                        dst[uvDst + x1] = v;
+                    }
                 }
             });
         }

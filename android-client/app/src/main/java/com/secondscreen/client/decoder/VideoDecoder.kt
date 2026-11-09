@@ -49,12 +49,30 @@ class VideoDecoder(private val surface: Surface) : AutoCloseable {
         }
     }
 
-    fun decodeFrame(nalData: ByteArray, ptsUs: Long, isKeyframe: Boolean) {
-        val decoder = codec ?: return
-        if (!isConfigured) return
+    fun decodeFrame(nalData: ByteArray, ptsUs: Long, isKeyframe: Boolean): Boolean {
+        val decoder = codec ?: return false
+        if (!isConfigured) return false
 
         try {
-            val inIndex = decoder.dequeueInputBuffer(10_000)
+            // Drain any pending outputs first to keep queue empty
+            var outIndex = decoder.dequeueOutputBuffer(bufferInfo, 0)
+            while (outIndex >= 0) {
+                decoder.releaseOutputBuffer(outIndex, true)
+                outIndex = decoder.dequeueOutputBuffer(bufferInfo, 0)
+            }
+
+            var inIndex = decoder.dequeueInputBuffer(2_000)
+            var retries = 0
+            while (inIndex < 0 && retries < 4) {
+                outIndex = decoder.dequeueOutputBuffer(bufferInfo, 0)
+                while (outIndex >= 0) {
+                    decoder.releaseOutputBuffer(outIndex, true)
+                    outIndex = decoder.dequeueOutputBuffer(bufferInfo, 0)
+                }
+                inIndex = decoder.dequeueInputBuffer(2_000)
+                retries++
+            }
+
             if (inIndex >= 0) {
                 val inputBuffer = decoder.getInputBuffer(inIndex)
                 if (inputBuffer != null) {
@@ -63,16 +81,21 @@ class VideoDecoder(private val surface: Surface) : AutoCloseable {
                     val flags = if (isKeyframe) MediaCodec.BUFFER_FLAG_KEY_FRAME else 0
                     decoder.queueInputBuffer(inIndex, 0, nalData.size, ptsUs, flags)
                 }
+            } else {
+                Log.w(TAG, "MediaCodec input buffer unavailable")
+                return false
             }
 
-            // Immediately drain outputs to surface
-            var outIndex = decoder.dequeueOutputBuffer(bufferInfo, 0)
+            // Drain output after queuing for immediate low-latency render
+            outIndex = decoder.dequeueOutputBuffer(bufferInfo, 0)
             while (outIndex >= 0) {
-                decoder.releaseOutputBuffer(outIndex, true) // true = render to surface
+                decoder.releaseOutputBuffer(outIndex, true)
                 outIndex = decoder.dequeueOutputBuffer(bufferInfo, 0)
             }
+            return true
         } catch (e: Exception) {
             Log.w(TAG, "Decode frame error", e)
+            return false
         }
     }
 
