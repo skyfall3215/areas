@@ -2,7 +2,7 @@
 ; SEE THE DOCUMENTATION FOR DETAILS ON CREATING INNO SETUP SCRIPT FILES!
 
 #define MyAppName "Areas"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.0.1"
 #define MyAppPublisher "skyfall3215"
 #define MyAppURL "https://github.com/skyfall3215/areas"
 #define MyAppExeName "Areas.exe"
@@ -22,7 +22,7 @@ DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 LicenseFile=d:\Areas\LICENSE
 OutputDir=d:\Areas\release
-OutputBaseFilename=Areas-Setup-v1.0.0
+OutputBaseFilename=Areas-Setup-v1.0.1
 SetupIconFile=d:\Areas\areas.ico
 UninstallDisplayIcon={app}\app.ico
 Compression=lzma2/ultra64
@@ -50,3 +50,4 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilen
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+
