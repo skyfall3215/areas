@@ -167,21 +167,17 @@ public sealed class SecondScreenServer : IDisposable
         OnStatusChanged?.Invoke($"Bağlı: {ConnectedClientName}");
         Log($"[+] HELLO alındı: {ConnectedClientDetails}, İstenen Bitrate: {hello.PreferredBitrateKbps} kbps");
 
-        // 2. Select target display (prioritizing 2nd / virtual screen)
+        // 2. Automatically extend Windows desktop so the virtual second screen is attached
+        try
+        {
+            DisplayTopologyManager.ExtendDesktop();
+            await Task.Delay(500, sessionCts.Token);
+        }
+        catch { }
+
+        // Select target display (prioritizing 2nd / virtual screen)
         var targetDisplay = DisplayEnumerator.GetTargetDisplay();
         Log($"[+] Hedef Monitör: {targetDisplay.DeviceName} ({targetDisplay.FriendlyName}) - {targetDisplay.Bounds.Width}x{targetDisplay.Bounds.Height}");
-
-        if (!targetDisplay.IsPrimary)
-        {
-            try
-            {
-                DisplayTopologyManager.ExtendDesktop();
-            }
-            catch (Exception ex)
-            {
-                Log($"[!] Masaüstü genişletme uyarısı: {ex.Message}");
-            }
-        }
 
         // 3. Initialize screen capture engine
         using var capture = new ScreenCaptureEngine();
@@ -474,9 +470,44 @@ public sealed class SecondScreenServer : IDisposable
     public static bool IsVirtualDisplayInstalled()
     {
         var displays = DisplayEnumerator.GetDisplays();
-        return displays.Any(d => d.FriendlyName.Contains("VDD", StringComparison.OrdinalIgnoreCase) ||
-                                 d.FriendlyName.Contains("Virtual", StringComparison.OrdinalIgnoreCase) ||
-                                 d.DeviceName.Contains("DISPLAY13", StringComparison.OrdinalIgnoreCase));
+        if (displays.Any(d => !d.IsPrimary ||
+                              d.FriendlyName.Contains("VDD", StringComparison.OrdinalIgnoreCase) ||
+                              d.FriendlyName.Contains("Virtual", StringComparison.OrdinalIgnoreCase) ||
+                              d.FriendlyName.Contains("İkinci", StringComparison.OrdinalIgnoreCase)))
+        {
+            return true;
+        }
+
+        try
+        {
+            var driverDir = GetDriverDirectory();
+            var devcon = Path.Combine(driverDir, "devcon.exe");
+            if (File.Exists(devcon))
+            {
+                var psi = new ProcessStartInfo
+                {
+                    FileName = devcon,
+                    Arguments = "status Root\\MttVDD",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    CreateNoWindow = true
+                };
+                using var proc = Process.Start(psi);
+                if (proc != null)
+                {
+                    string output = proc.StandardOutput.ReadToEnd();
+                    proc.WaitForExit(1000);
+                    if (output.Contains("matching device", StringComparison.OrdinalIgnoreCase) ||
+                        output.Contains("running", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        catch { }
+
+        return false;
     }
 
     private static string GetDriverDirectory()

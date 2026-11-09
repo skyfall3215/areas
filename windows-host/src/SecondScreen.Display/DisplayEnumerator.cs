@@ -36,6 +36,22 @@ public static class DisplayEnumerator
     [DllImport("user32.dll", CharSet = CharSet.Auto)]
     private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFOEX lpmi);
 
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
+    private struct DEVMODE
+    {
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmDeviceName;
+        public short dmSpecVersion; public short dmDriverVersion; public short dmSize; public short dmDriverExtra;
+        public int dmFields; public int dmPositionX; public int dmPositionY;
+        public int dmDisplayOrientation; public int dmDisplayFixedOutput;
+        public short dmColor; public short dmDuplex; public short dmYResolution; public short dmTTOption; public short dmCollate;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmFormName;
+        public short dmLogPixels; public int dmBitsPerPel; public int dmPelsWidth; public int dmPelsHeight;
+        public int dmDisplayFlags; public int dmDisplayFrequency;
+    }
+
+    [DllImport("user32.dll", CharSet = CharSet.Auto)]
+    private static extern bool EnumDisplaySettings(string lpszDeviceName, int iModeNum, ref DEVMODE lpDevMode);
+
     public static IReadOnlyList<DisplayInfo> GetDisplays()
     {
         var list = new List<DisplayInfo>();
@@ -48,6 +64,7 @@ public static class DisplayEnumerator
 
             if (GetMonitorInfo(hMon, ref mi))
             {
+                string devName = mi.szDevice ?? $"\\\\.\\DISPLAY{index + 1}";
                 var bounds = new Rectangle(
                     mi.rcMonitor.left,
                     mi.rcMonitor.top,
@@ -55,8 +72,15 @@ public static class DisplayEnumerator
                     mi.rcMonitor.bottom - mi.rcMonitor.top
                 );
 
+                // Use physical device mode settings to avoid High-DPI virtualization skew
+                var dm = new DEVMODE();
+                dm.dmSize = (short)Marshal.SizeOf<DEVMODE>();
+                if (EnumDisplaySettings(devName, -1, ref dm) && dm.dmPelsWidth > 0 && dm.dmPelsHeight > 0)
+                {
+                    bounds = new Rectangle(dm.dmPositionX, dm.dmPositionY, dm.dmPelsWidth, dm.dmPelsHeight);
+                }
+
                 bool isPrimary = (mi.dwFlags & MONITORINFOF_PRIMARY) != 0;
-                string devName = mi.szDevice ?? $"\\\\.\\DISPLAY{index + 1}";
                 bool isVirtual = devName.Contains("VDD", StringComparison.OrdinalIgnoreCase) ||
                                  !isPrimary;
 

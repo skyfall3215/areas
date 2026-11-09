@@ -31,7 +31,21 @@ public static class DisplayTopologyManager
         try
         {
             int result = SetDisplayConfig(0, IntPtr.Zero, 0, IntPtr.Zero, SDC_APPLY | SDC_TOPOLOGY_EXTEND);
-            return result == 0;
+            if (result == 0) return true;
+        }
+        catch { }
+
+        try
+        {
+            using var proc = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "displayswitch.exe",
+                Arguments = "/extend",
+                UseShellExecute = true,
+                CreateNoWindow = true
+            });
+            proc?.WaitForExit(2000);
+            return true;
         }
         catch
         {
@@ -48,7 +62,21 @@ public static class DisplayTopologyManager
         try
         {
             int result = SetDisplayConfig(0, IntPtr.Zero, 0, IntPtr.Zero, SDC_APPLY | SDC_TOPOLOGY_INTERNAL);
-            return result == 0;
+            if (result == 0) return true;
+        }
+        catch { }
+
+        try
+        {
+            using var proc = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "displayswitch.exe",
+                Arguments = "/internal",
+                UseShellExecute = true,
+                CreateNoWindow = true
+            });
+            proc?.WaitForExit(2000);
+            return true;
         }
         catch
         {

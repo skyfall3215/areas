@@ -150,12 +150,14 @@ public sealed class ServerDashboardForm : Form
         pnlControls.Controls.Add(_btnToggleServer);
 
         _btnExtendDesktop = CreateButton("🖥️ Masaüstünü Genişlet (Extend)", Color.FromArgb(39, 39, 46), Color.White);
-        _btnExtendDesktop.Click += (_, _) =>
+        _btnExtendDesktop.Click += async (_, _) =>
         {
             try
             {
                 DisplayTopologyManager.ExtendDesktop();
                 AddLog("[+] Masaüstü genişletildi (Extend).");
+                await Task.Delay(500);
+                UpdateDisplayInfo();
             }
             catch (Exception ex)
             {
@@ -228,12 +230,14 @@ public sealed class ServerDashboardForm : Form
             UpdateDisplayInfo();
         });
 
-        var btnSingleScreen = CreateSmallButton("Yalnızca Laptop Ekranı", (_, _) =>
+        var btnSingleScreen = CreateSmallButton("Yalnızca Laptop Ekranı", async (_, _) =>
         {
             try
             {
                 DisplayTopologyManager.RestoreInternalOnly();
                 AddLog("[+] Yalnızca birincil ekran moduna dönüldü.");
+                await Task.Delay(500);
+                UpdateDisplayInfo();
             }
             catch (Exception ex)
             {
@@ -412,13 +416,18 @@ public sealed class ServerDashboardForm : Form
 
         if (secondDisp != null)
         {
-            _lblVirtualDisplayStatus.Text = $"• Sanal Ekran: {secondDisp.FriendlyName} ({secondDisp.Bounds.Width}x{secondDisp.Bounds.Height} at {secondDisp.Bounds.X},{secondDisp.Bounds.Y})";
-            _lblVirtualDisplayStatus.ForeColor = Color.FromArgb(34, 197, 94);
+            _lblVirtualDisplayStatus.Text = $"• İkinci Ekran: {secondDisp.FriendlyName} ({secondDisp.Bounds.Width}x{secondDisp.Bounds.Height} at {secondDisp.Bounds.X},{secondDisp.Bounds.Y})";
+            _lblVirtualDisplayStatus.ForeColor = Color.FromArgb(34, 197, 94); // Green
+        }
+        else if (SecondScreenServer.IsVirtualDisplayInstalled())
+        {
+            _lblVirtualDisplayStatus.Text = "• Sürücü: Kurulu (Aktif) | Masaüstü: Tek Ekran ('Genişlet'e basın)";
+            _lblVirtualDisplayStatus.ForeColor = Color.FromArgb(245, 158, 11); // Amber
         }
         else
         {
-            _lblVirtualDisplayStatus.Text = "• Sanal Ekran: Algılanmadı (Sürücüyü Kur butonuna basın)";
-            _lblVirtualDisplayStatus.ForeColor = Color.FromArgb(239, 68, 68);
+            _lblVirtualDisplayStatus.Text = "• Sanal Ekran Sürücüsü: Kurulu Değil (Sürücüyü Kur butonuna basın)";
+            _lblVirtualDisplayStatus.ForeColor = Color.FromArgb(239, 68, 68); // Red
         }
     }
 

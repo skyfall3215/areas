@@ -124,6 +124,7 @@ public sealed class GdiScreenCapture : IDisposable
         IntPtr hdcSrc, int nXSrc, int nYSrc, uint dwRop);
 
     private string? _deviceName;
+    private bool _isDeviceDc;
     private IntPtr _hdcSrc;
     private IntPtr _hdcMem;
     private IntPtr _hBitmap;
@@ -156,20 +157,24 @@ public sealed class GdiScreenCapture : IDisposable
 
         if (_width <= 0 || _height <= 0) return false;
 
-        // Try direct display device DC first (e.g. \\.\DISPLAY13), fallback to primary DISPLAY
+        // Try direct display device DC first (e.g. \\.\DISPLAY24), fallback to primary DISPLAY
+        _isDeviceDc = false;
         if (!string.IsNullOrEmpty(_deviceName))
         {
             _hdcSrc = CreateDC(_deviceName, null, null, IntPtr.Zero);
+            _isDeviceDc = (_hdcSrc != IntPtr.Zero);
         }
 
         if (_hdcSrc == IntPtr.Zero)
         {
             _hdcSrc = CreateDC("DISPLAY", null, null, IntPtr.Zero);
+            _isDeviceDc = false;
         }
 
         if (_hdcSrc == IntPtr.Zero)
         {
             _hdcSrc = GetDC(IntPtr.Zero);
+            _isDeviceDc = false;
         }
 
         if (_hdcSrc == IntPtr.Zero) return false;
@@ -228,9 +233,9 @@ public sealed class GdiScreenCapture : IDisposable
     {
         if (!_isInitialized || _buffer == null || _pBits == IntPtr.Zero || _hdcSrc == IntPtr.Zero) return null;
 
-        // If using device-specific DC (e.g. \\.\DISPLAY13), source coordinates start at (0, 0)
-        int srcX = (!string.IsNullOrEmpty(_deviceName) && _hdcSrc != IntPtr.Zero) ? 0 : _x;
-        int srcY = (!string.IsNullOrEmpty(_deviceName) && _hdcSrc != IntPtr.Zero) ? 0 : _y;
+        // If using device-specific DC (e.g. \\.\DISPLAY24), source coordinates start at (0, 0)
+        int srcX = _isDeviceDc ? 0 : _x;
+        int srcY = _isDeviceDc ? 0 : _y;
 
         bool success = BitBlt(_hdcMem, 0, 0, _width, _height, _hdcSrc, srcX, srcY, SRCCOPY);
         if (!success)
