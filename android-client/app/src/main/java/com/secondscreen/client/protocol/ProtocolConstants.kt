@@ -31,6 +31,7 @@ enum class MessageType(val code: Byte) {
     VIDEO_FRAME(0x11),
     KEYFRAME_REQ(0x12),
     TOUCH_EVENT(0x20),
+    KEYBOARD_EVENT(0x21),
     PING(0x30),
     PONG(0x31),
     ERROR(0xF0.toByte()),

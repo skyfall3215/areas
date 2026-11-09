@@ -284,5 +284,33 @@ class ProtocolTest {
         assertEquals(4.5, snapshot.decodeMs, 0.01)
         assertTrue(snapshot.estimatedPipelineMs > 9.0)
     }
+
+    @Test
+    fun touchEventMessage_multiPointer_roundTrip() {
+        val pointers = listOf(
+            PointerEntry(pointerId = 0, action = TouchAction.DOWN, normalizedX = 1000, normalizedY = 2000, contactRadius = 25),
+            PointerEntry(pointerId = 1, action = TouchAction.MOVE, normalizedX = 65535, normalizedY = 32768, contactRadius = 40)
+        )
+        val msg = TouchEventMessage(pointerCount = 2, changedIndex = 1, pointers = pointers)
+        val bytes = msg.toByteArray()
+        assertEquals(18, bytes.size) // 2 + 2 * 8
+
+        val parsed = TouchEventMessage.readPayloadFrom(ByteBuffer.wrap(bytes))
+        assertEquals(2, parsed.pointerCount)
+        assertEquals(1, parsed.changedIndex)
+        assertEquals(2, parsed.pointers.size)
+
+        assertEquals(0, parsed.pointers[0].pointerId)
+        assertEquals(TouchAction.DOWN, parsed.pointers[0].action)
+        assertEquals(1000, parsed.pointers[0].normalizedX)
+        assertEquals(2000, parsed.pointers[0].normalizedY)
+        assertEquals(25, parsed.pointers[0].contactRadius)
+
+        assertEquals(1, parsed.pointers[1].pointerId)
+        assertEquals(TouchAction.MOVE, parsed.pointers[1].action)
+        assertEquals(65535, parsed.pointers[1].normalizedX)
+        assertEquals(32768, parsed.pointers[1].normalizedY)
+        assertEquals(40, parsed.pointers[1].contactRadius)
+    }
 }
 

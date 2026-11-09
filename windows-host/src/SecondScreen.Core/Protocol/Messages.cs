@@ -270,3 +270,126 @@ public sealed record DisconnectMessage(byte Reason)
     }
 }
 
+public static class TouchAction
+{
+    public const byte Down = 0x01;
+    public const byte Move = 0x02;
+    public const byte Up = 0x03;
+    public const byte Cancel = 0x04;
+    public const byte Scroll = 0x05;     // Wheel scroll (NormalizedY contains scroll delta)
+    public const byte RightClick = 0x06; // Right click tap
+    public const byte LeftClick = 0x07;  // Single tap click
+}
+
+public readonly record struct PointerEntry(
+    byte PointerId,
+    byte Action,
+    ushort NormalizedX,
+    ushort NormalizedY,
+    ushort ContactRadius = 0)
+{
+    public const int EntrySize = 8;
+
+    public void WriteTo(Span<byte> destination)
+    {
+        destination[0] = PointerId;
+        destination[1] = Action;
+        BinaryPrimitives.WriteUInt16BigEndian(destination[2..4], NormalizedX);
+        BinaryPrimitives.WriteUInt16BigEndian(destination[4..6], NormalizedY);
+        BinaryPrimitives.WriteUInt16BigEndian(destination[6..8], ContactRadius);
+    }
+
+    public static PointerEntry ReadFrom(ReadOnlySpan<byte> source)
+    {
+        return new PointerEntry(
+            PointerId: source[0],
+            Action: source[1],
+            NormalizedX: BinaryPrimitives.ReadUInt16BigEndian(source[2..4]),
+            NormalizedY: BinaryPrimitives.ReadUInt16BigEndian(source[4..6]),
+            ContactRadius: BinaryPrimitives.ReadUInt16BigEndian(source[6..8])
+        );
+    }
+}
+
+public sealed record TouchEventMessage(
+    byte PointerCount,
+    byte ChangedIndex,
+    PointerEntry[] Pointers)
+{
+    public int PayloadSize => 2 + (PointerCount * PointerEntry.EntrySize);
+
+    public void WritePayloadTo(Span<byte> destination)
+    {
+        if (destination.Length < PayloadSize)
+            throw new ArgumentException("Buffer too small for TouchEventMessage payload.", nameof(destination));
+
+        destination[0] = PointerCount;
+        destination[1] = ChangedIndex;
+        for (int i = 0; i < PointerCount; i++)
+        {
+            Pointers[i].WriteTo(destination.Slice(2 + (i * PointerEntry.EntrySize), PointerEntry.EntrySize));
+        }
+    }
+
+    public static TouchEventMessage ReadPayloadFrom(ReadOnlySpan<byte> source)
+    {
+        if (source.Length < 2)
+            throw new ArgumentException("Buffer too small for TouchEventMessage payload.", nameof(source));
+
+        byte count = source[0];
+        byte changedIdx = source[1];
+        int expectedLen = 2 + (count * PointerEntry.EntrySize);
+        if (source.Length < expectedLen)
+            throw new ArgumentException($"Buffer too small for {count} pointers.", nameof(source));
+
+        var pointers = new PointerEntry[count];
+        for (int i = 0; i < count; i++)
+        {
+            pointers[i] = PointerEntry.ReadFrom(source.Slice(2 + (i * PointerEntry.EntrySize), PointerEntry.EntrySize));
+        }
+
+        return new TouchEventMessage(count, changedIdx, pointers);
+    }
+}
+
+public static class KeyboardFlags
+{
+    public const byte KeyDown = 0x01;
+    public const byte IsUnicode = 0x02;
+    public const byte Shift = 0x04;
+    public const byte Ctrl = 0x08;
+    public const byte Alt = 0x10;
+}
+
+public sealed record KeyboardEventMessage(
+    ushort KeyCode,
+    byte Flags)
+{
+    public const int PayloadSize = 3;
+
+    public bool IsKeyDown => (Flags & KeyboardFlags.KeyDown) != 0;
+    public bool IsUnicode => (Flags & KeyboardFlags.IsUnicode) != 0;
+    public bool HasShift => (Flags & KeyboardFlags.Shift) != 0;
+    public bool HasCtrl => (Flags & KeyboardFlags.Ctrl) != 0;
+    public bool HasAlt => (Flags & KeyboardFlags.Alt) != 0;
+
+    public void WritePayloadTo(Span<byte> destination)
+    {
+        if (destination.Length < PayloadSize)
+            throw new ArgumentException("Buffer too small for KeyboardEventMessage payload.", nameof(destination));
+
+        BinaryPrimitives.WriteUInt16BigEndian(destination[0..2], KeyCode);
+        destination[2] = Flags;
+    }
+
+    public static KeyboardEventMessage ReadPayloadFrom(ReadOnlySpan<byte> source)
+    {
+        if (source.Length < PayloadSize)
+            throw new ArgumentException("Buffer too small for KeyboardEventMessage payload.", nameof(source));
+
+        ushort code = BinaryPrimitives.ReadUInt16BigEndian(source[0..2]);
+        byte flags = source[2];
+        return new KeyboardEventMessage(code, flags);
+    }
+}
+

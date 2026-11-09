@@ -23,6 +23,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\SecondScreen.Core\SecondScreen.Core.csproj" />
     <ProjectReference Include="..\..\src\SecondScreen.Network\SecondScreen.Network.csproj" />
+    <ProjectReference Include="..\..\src\SecondScreen.Input\SecondScreen.Input.csproj" />
   </ItemGroup>
 
 </Project>

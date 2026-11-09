@@ -243,3 +243,112 @@ data class PongMessage(
     }
 }
 
+object TouchAction {
+    const val DOWN: Byte = 0x01
+    const val MOVE: Byte = 0x02
+    const val UP: Byte = 0x03
+    const val CANCEL: Byte = 0x04
+    const val SCROLL: Byte = 0x05     // Wheel scroll (NormalizedY contains scroll delta)
+    const val RIGHT_CLICK: Byte = 0x06 // Long-press or 2-finger tap right click
+    const val LEFT_CLICK: Byte = 0x07  // Single tap left click
+}
+
+data class PointerEntry(
+    val pointerId: Int,
+    val action: Byte,
+    val normalizedX: Int,
+    val normalizedY: Int,
+    val contactRadius: Int = 0
+) {
+    companion object {
+        const val ENTRY_SIZE = 8
+
+        fun readFrom(buffer: ByteBuffer): PointerEntry {
+            val id = buffer.get().toInt() and 0xFF
+            val act = buffer.get()
+            val x = buffer.short.toInt() and 0xFFFF
+            val y = buffer.short.toInt() and 0xFFFF
+            val r = buffer.short.toInt() and 0xFFFF
+            return PointerEntry(id, act, x, y, r)
+        }
+    }
+
+    fun writeTo(buffer: ByteBuffer) {
+        buffer.put(pointerId.toByte())
+        buffer.put(action)
+        buffer.putShort(normalizedX.toShort())
+        buffer.putShort(normalizedY.toShort())
+        buffer.putShort(contactRadius.toShort())
+    }
+}
+
+data class TouchEventMessage(
+    val pointerCount: Int,
+    val changedIndex: Int,
+    val pointers: List<PointerEntry>
+) {
+    val payloadSize: Int get() = 2 + (pointerCount * PointerEntry.ENTRY_SIZE)
+
+    companion object {
+        fun readPayloadFrom(buffer: ByteBuffer): TouchEventMessage {
+            buffer.order(ByteOrder.BIG_ENDIAN)
+            val count = buffer.get().toInt() and 0xFF
+            val changedIdx = buffer.get().toInt() and 0xFF
+            val list = ArrayList<PointerEntry>(count)
+            for (i in 0 until count) {
+                list.add(PointerEntry.readFrom(buffer))
+            }
+            return TouchEventMessage(count, changedIdx, list)
+        }
+    }
+
+    fun toByteArray(): ByteArray {
+        val bytes = ByteArray(payloadSize)
+        val buf = ByteBuffer.wrap(bytes).order(ByteOrder.BIG_ENDIAN)
+        buf.put(pointerCount.toByte())
+        buf.put(changedIndex.toByte())
+        for (p in pointers) {
+            p.writeTo(buf)
+        }
+        return bytes
+    }
+}
+
+object KeyboardFlags {
+    const val KEY_DOWN: Byte = 0x01
+    const val IS_UNICODE: Byte = 0x02
+    const val SHIFT: Byte = 0x04
+    const val CTRL: Byte = 0x08
+    const val ALT: Byte = 0x10
+}
+
+data class KeyboardEventMessage(
+    val keyCode: Int,
+    val flags: Byte
+) {
+    val isKeyDown: Boolean get() = (flags.toInt() and KeyboardFlags.KEY_DOWN.toInt()) != 0
+    val isUnicode: Boolean get() = (flags.toInt() and KeyboardFlags.IS_UNICODE.toInt()) != 0
+    val hasShift: Boolean get() = (flags.toInt() and KeyboardFlags.SHIFT.toInt()) != 0
+    val hasCtrl: Boolean get() = (flags.toInt() and KeyboardFlags.CTRL.toInt()) != 0
+    val hasAlt: Boolean get() = (flags.toInt() and KeyboardFlags.ALT.toInt()) != 0
+
+    companion object {
+        const val PAYLOAD_SIZE = 3
+
+        fun readPayloadFrom(buffer: ByteBuffer): KeyboardEventMessage {
+            buffer.order(ByteOrder.BIG_ENDIAN)
+            val code = buffer.short.toInt() and 0xFFFF
+            val flags = buffer.get()
+            return KeyboardEventMessage(code, flags)
+        }
+    }
+
+    fun toByteArray(): ByteArray {
+        val bytes = ByteArray(PAYLOAD_SIZE)
+        val buf = ByteBuffer.wrap(bytes).order(ByteOrder.BIG_ENDIAN)
+        buf.putShort((keyCode and 0xFFFF).toShort())
+        buf.put(flags)
+        return bytes
+    }
+}
+

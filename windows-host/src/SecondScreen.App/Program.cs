@@ -258,7 +258,15 @@ public static class Program
         int sequence = 2;
         uint sentFrameCount = 0;
 
-        // 5. Background task for incoming packets (KEYFRAME_REQ, PING, PONG, DISCONNECT)
+        using var touchInjector = new SecondScreen.Input.Win32TouchInjector();
+        if (touchInjector.Initialize(10))
+        {
+            Console.WriteLine("[+] Win32 Donanımsal Çoklu Dokunma Enjektörü hazır.");
+        }
+
+        var keyboardInjector = new SecondScreen.Input.Win32KeyboardInjector();
+
+        // 5. Background task for incoming packets (KEYFRAME_REQ, PING, PONG, TOUCH_EVENT, DISCONNECT)
         var receiveTask = Task.Run(async () =>
         {
             try
@@ -295,6 +303,24 @@ public static class Program
                         {
                             Console.WriteLine($"[RTT] Ağ gecikmesi: {rttTracker.LastRttMs:F1} ms (Tek yön RTT/2: {rttTracker.LastOneWayMs:F1} ms)");
                         }
+                    }
+                    else if (inHeader.MsgType == MessageType.TouchEvent)
+                    {
+                        var touchMsg = TouchEventMessage.ReadPayloadFrom(inPayload);
+                        bool ok = touchInjector.InjectTouch(touchMsg);
+                        if (touchMsg.PointerCount > 0)
+                        {
+                            var p0 = touchMsg.Pointers[0];
+                            if (p0.Action != TouchAction.Move || (sentFrameCount % 30 == 0))
+                            {
+                                Console.WriteLine($"[Touch] Parmak: {touchMsg.PointerCount}, Eylem: {p0.Action}, Konum: ({p0.NormalizedX},{p0.NormalizedY}), Başarılı: {ok}");
+                            }
+                        }
+                    }
+                    else if (inHeader.MsgType == MessageType.KeyboardEvent)
+                    {
+                        var keyMsg = KeyboardEventMessage.ReadPayloadFrom(inPayload);
+                        keyboardInjector.InjectKey(keyMsg);
                     }
                     else if (inHeader.MsgType == MessageType.Disconnect)
                     {

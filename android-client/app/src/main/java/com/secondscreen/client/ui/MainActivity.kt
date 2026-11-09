@@ -1,11 +1,19 @@
 package com.secondscreen.client.ui
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Color
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
+import android.text.Editable
+import android.text.TextWatcher
 import android.util.DisplayMetrics
+import android.util.Log
+import android.view.HapticFeedbackConstants
+import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.View
 import android.view.WindowInsets
@@ -20,16 +28,22 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import com.secondscreen.client.databinding.ActivityMainBinding
 import com.secondscreen.client.decoder.VideoDecoder
+import com.secondscreen.client.input.TouchCoordinateMapper
 import com.secondscreen.client.network.DiscoveredHost
 import com.secondscreen.client.network.LanDiscoveryListener
 import com.secondscreen.client.protocol.FrameHeader
 import com.secondscreen.client.protocol.HelloAckMessage
 import com.secondscreen.client.protocol.HelloMessage
+import com.secondscreen.client.protocol.KeyboardEventMessage
+import com.secondscreen.client.protocol.KeyboardFlags
 import com.secondscreen.client.protocol.KeyframeReqMessage
 import com.secondscreen.client.protocol.MessageType
 import com.secondscreen.client.protocol.PingMessage
+import com.secondscreen.client.protocol.PointerEntry
 import com.secondscreen.client.protocol.PongMessage
 import com.secondscreen.client.protocol.ProtocolConstants
+import com.secondscreen.client.protocol.TouchAction
+import com.secondscreen.client.protocol.TouchEventMessage
 import com.secondscreen.client.protocol.VideoConfigMessage
 import com.secondscreen.client.protocol.VideoFrameMessage
 import com.secondscreen.client.telemetry.TelemetryTracker
@@ -38,6 +52,8 @@ import com.secondscreen.client.transport.SocketTransport
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.isActive
@@ -60,6 +76,28 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
     private val discoveryListener = LanDiscoveryListener()
     private var userCancelled = false
+    private var isStreamingActive = false
+    private val touchChannel = Channel<TouchEventMessage>(
+        capacity = 16,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+    private val keyboardChannel = Channel<KeyboardEventMessage>(
+        capacity = 64,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+    private var isKeyboardVisible = false
+
+    // Windows Touch / Gesture Recognition State
+    private var touchDownTime = 0L
+    private var touchDownX = 0f
+    private var touchDownY = 0f
+    private var isLongPressFired = false
+    private var isDragging = false
+    private var longPressJob: Job? = null
+    private var lastTwoFingerY = 0f
+    private var isTwoFingerScroll = false
+    private var twoFingerTapCandidate = false
+    private var twoFingerDownTime = 0L
 
     private fun acquireWifiLock() {
         try {
@@ -153,8 +191,351 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
             binding.txtHudLoss.visibility = if (isHudDetailed) View.VISIBLE else View.GONE
         }
 
+        binding.btnToggleKeyboard.setOnClickListener {
+            Log.d("SecondScreenTouch", "btnToggleKeyboard clicked by user!")
+            toggleSoftKeyboard()
+        }
+
+        binding.hiddenInputReceiver.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                if (s.isNullOrEmpty()) return
+                for (i in start until (start + count)) {
+                    val c = s[i]
+                    keyboardChannel.trySend(
+                        KeyboardEventMessage(
+                            keyCode = c.code,
+                            flags = (KeyboardFlags.KEY_DOWN.toInt() or KeyboardFlags.IS_UNICODE.toInt()).toByte()
+                        )
+                    )
+                    keyboardChannel.trySend(
+                        KeyboardEventMessage(
+                            keyCode = c.code,
+                            flags = KeyboardFlags.IS_UNICODE
+                        )
+                    )
+                }
+            }
+            override fun afterTextChanged(s: Editable?) {
+                if (!s.isNullOrEmpty()) {
+                    s.clear()
+                }
+            }
+        })
+
         // Start UDP LAN Discovery
         startDiscovery()
+
+        // Enable multi-touch capture on the video surface
+        setupTouchHandling()
+    }
+
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        if (isStreamingActive && lastStreamWidth > 0 && lastStreamHeight > 0) {
+            // Allow interacting with the HUD overlay if visible
+            if (binding.hudOverlay.visibility == View.VISIBLE) {
+                val hudRect = android.graphics.Rect()
+                binding.hudOverlay.getGlobalVisibleRect(hudRect)
+                if (hudRect.contains(ev.rawX.toInt(), ev.rawY.toInt())) {
+                    return super.dispatchTouchEvent(ev)
+                }
+            }
+            // Allow clicking the floating keyboard button if visible
+            if (binding.btnToggleKeyboard.visibility == View.VISIBLE) {
+                val btnRect = android.graphics.Rect()
+                binding.btnToggleKeyboard.getGlobalVisibleRect(btnRect)
+                if (btnRect.contains(ev.rawX.toInt(), ev.rawY.toInt())) {
+                    return super.dispatchTouchEvent(ev)
+                }
+            }
+            if (processMotionEvent(ev)) {
+                return true
+            }
+        }
+        return super.dispatchTouchEvent(ev)
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (isStreamingActive && event.action == KeyEvent.ACTION_DOWN) {
+            when (event.keyCode) {
+                KeyEvent.KEYCODE_DEL -> { // Backspace
+                    keyboardChannel.trySend(KeyboardEventMessage(keyCode = 0x08, flags = KeyboardFlags.KEY_DOWN))
+                    keyboardChannel.trySend(KeyboardEventMessage(keyCode = 0x08, flags = 0))
+                    return true
+                }
+                KeyEvent.KEYCODE_ENTER -> { // Enter
+                    keyboardChannel.trySend(KeyboardEventMessage(keyCode = 0x0D, flags = KeyboardFlags.KEY_DOWN))
+                    keyboardChannel.trySend(KeyboardEventMessage(keyCode = 0x0D, flags = 0))
+                    return true
+                }
+                KeyEvent.KEYCODE_TAB -> {
+                    keyboardChannel.trySend(KeyboardEventMessage(keyCode = 0x09, flags = KeyboardFlags.KEY_DOWN))
+                    keyboardChannel.trySend(KeyboardEventMessage(keyCode = 0x09, flags = 0))
+                    return true
+                }
+                KeyEvent.KEYCODE_ESCAPE -> {
+                    keyboardChannel.trySend(KeyboardEventMessage(keyCode = 0x1B, flags = KeyboardFlags.KEY_DOWN))
+                    keyboardChannel.trySend(KeyboardEventMessage(keyCode = 0x1B, flags = 0))
+                    return true
+                }
+                KeyEvent.KEYCODE_SPACE -> {
+                    keyboardChannel.trySend(
+                        KeyboardEventMessage(
+                            keyCode = ' '.code,
+                            flags = (KeyboardFlags.KEY_DOWN.toInt() or KeyboardFlags.IS_UNICODE.toInt()).toByte()
+                        )
+                    )
+                    keyboardChannel.trySend(KeyboardEventMessage(keyCode = ' '.code, flags = KeyboardFlags.IS_UNICODE))
+                    return true
+                }
+            }
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
+    private fun toggleSoftKeyboard() {
+        val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+        Log.d("SecondScreenTouch", "toggleSoftKeyboard called! current isKeyboardVisible=$isKeyboardVisible")
+        if (isKeyboardVisible) {
+            imm.hideSoftInputFromWindow(binding.hiddenInputReceiver.windowToken, 0)
+            binding.hiddenInputReceiver.clearFocus()
+            isKeyboardVisible = false
+        } else {
+            binding.hiddenInputReceiver.requestFocus()
+            val shown = imm.showSoftInput(binding.hiddenInputReceiver, InputMethodManager.SHOW_IMPLICIT)
+            if (!shown) {
+                imm.toggleSoftInput(InputMethodManager.SHOW_FORCED, 0)
+            }
+            isKeyboardVisible = true
+        }
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun setupTouchHandling() {
+        binding.videoSurface.isClickable = true
+        binding.videoSurface.setOnTouchListener { _, event ->
+            processMotionEvent(event)
+        }
+    }
+
+    private fun processMotionEvent(event: MotionEvent): Boolean {
+        if (!isStreamingActive || lastStreamWidth <= 0 || lastStreamHeight <= 0) {
+            return false
+        }
+
+        val viewWidth = binding.videoSurface.width
+        val viewHeight = binding.videoSurface.height
+        if (viewWidth <= 0 || viewHeight <= 0) return false
+
+        val actionMasked = event.actionMasked
+        val pointerCount = event.pointerCount
+
+        // 1. Üç Parmakla Dokunma -> Sanal Klavyeyi Aç/Kapat (Moonlight Mantığı)
+        if (pointerCount == 3) {
+            longPressJob?.cancel()
+            if (actionMasked == MotionEvent.ACTION_POINTER_DOWN && event.actionIndex == 2) {
+                toggleSoftKeyboard()
+                binding.root.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                return true
+            }
+            return true
+        }
+
+        // 2. İki Parmak Hareketleri (Dikey Kaydırma & İki Parmakla Sağ Tık)
+        if (pointerCount == 2) {
+            longPressJob?.cancel()
+            when (actionMasked) {
+                MotionEvent.ACTION_POINTER_DOWN -> {
+                    twoFingerDownTime = SystemClock.uptimeMillis()
+                    twoFingerTapCandidate = true
+                    isTwoFingerScroll = false
+                    lastTwoFingerY = (event.getY(0) + event.getY(1)) / 2f
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val currentMidY = (event.getY(0) + event.getY(1)) / 2f
+                    val deltaY = currentMidY - lastTwoFingerY
+                    if (Math.abs(deltaY) > 8f) {
+                        twoFingerTapCandidate = false
+                        isTwoFingerScroll = true
+                        val scrollDelta = (deltaY * 3.5f).toInt().coerceIn(-480, 480)
+                        touchChannel.trySend(
+                            TouchEventMessage(
+                                pointerCount = 1,
+                                changedIndex = 0,
+                                pointers = listOf(
+                                    PointerEntry(0, TouchAction.SCROLL, 0, scrollDelta)
+                                )
+                            )
+                        )
+                        lastTwoFingerY = currentMidY
+                    }
+                }
+                MotionEvent.ACTION_POINTER_UP -> {
+                    if (twoFingerTapCandidate && (SystemClock.uptimeMillis() - twoFingerDownTime < 350)) {
+                        // İki parmakla dokunup bırakma = SAĞ TIK!
+                        val coords = TouchCoordinateMapper.mapTouchToNormalized(
+                            event.getX(0), event.getY(0), viewWidth, viewHeight, lastStreamWidth, lastStreamHeight
+                        )
+                        coords?.let {
+                            touchChannel.trySend(
+                                TouchEventMessage(
+                                    pointerCount = 1,
+                                    changedIndex = 0,
+                                    pointers = listOf(
+                                        PointerEntry(0, TouchAction.RIGHT_CLICK, it.first, it.second)
+                                    )
+                                )
+                            )
+                            binding.root.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                        }
+                    }
+                }
+            }
+            return true
+        }
+
+        // 3. Tek Parmak Dokunma (Windows Dokunmatik & Fare Mantığı)
+        if (pointerCount == 1) {
+            when (actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    touchDownTime = SystemClock.uptimeMillis()
+                    touchDownX = event.x
+                    touchDownY = event.y
+                    isLongPressFired = false
+                    isDragging = false
+
+                    // 500 ms basılı tutma sayacı başlat (Sağ Tık)
+                    longPressJob?.cancel()
+                    longPressJob = lifecycleScope.launch {
+                        delay(500)
+                        if (!isDragging && isStreamingActive) {
+                            isLongPressFired = true
+                            val coords = TouchCoordinateMapper.mapTouchToNormalized(
+                                touchDownX, touchDownY, viewWidth, viewHeight, lastStreamWidth, lastStreamHeight
+                            )
+                            coords?.let {
+                                touchChannel.trySend(
+                                    TouchEventMessage(
+                                        pointerCount = 1,
+                                        changedIndex = 0,
+                                        pointers = listOf(
+                                            PointerEntry(0, TouchAction.RIGHT_CLICK, it.first, it.second)
+                                        )
+                                    )
+                                )
+                                binding.root.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                                Log.d("SecondScreenTouch", "Long Press -> Right Click at (${it.first}, ${it.second})")
+                            }
+                        }
+                    }
+                    return true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = event.x - touchDownX
+                    val dy = event.y - touchDownY
+                    val distSq = dx * dx + dy * dy
+
+                    if (distSq > 400) { // 20 piksel hareket eşiği (deadzone aşıldı)
+                        longPressJob?.cancel()
+                        if (!isLongPressFired) {
+                            if (!isDragging) {
+                                isDragging = true
+                                // Sürükleme başlangıcı (DOWN)
+                                val downCoords = TouchCoordinateMapper.mapTouchToNormalized(
+                                    touchDownX, touchDownY, viewWidth, viewHeight, lastStreamWidth, lastStreamHeight
+                                )
+                                downCoords?.let {
+                                    touchChannel.trySend(
+                                        TouchEventMessage(
+                                            pointerCount = 1,
+                                            changedIndex = 0,
+                                            pointers = listOf(
+                                                PointerEntry(0, TouchAction.DOWN, it.first, it.second)
+                                            )
+                                        )
+                                    )
+                                }
+                            }
+                            val coords = TouchCoordinateMapper.mapTouchToNormalized(
+                                event.x, event.y, viewWidth, viewHeight, lastStreamWidth, lastStreamHeight
+                            )
+                            coords?.let {
+                                touchChannel.trySend(
+                                    TouchEventMessage(
+                                        pointerCount = 1,
+                                        changedIndex = 0,
+                                        pointers = listOf(
+                                            PointerEntry(0, TouchAction.MOVE, it.first, it.second)
+                                        )
+                                    )
+                                )
+                            }
+                        }
+                    }
+                    return true
+                }
+                MotionEvent.ACTION_UP -> {
+                    longPressJob?.cancel()
+                    if (isLongPressFired) {
+                        // Uzun basma ile sağ tık yapıldı, sol tık atma
+                    } else if (isDragging) {
+                        // Sürükleme tamamlandı (UP)
+                        val coords = TouchCoordinateMapper.mapTouchToNormalized(
+                            event.x, event.y, viewWidth, viewHeight, lastStreamWidth, lastStreamHeight
+                        )
+                        coords?.let {
+                            touchChannel.trySend(
+                                TouchEventMessage(
+                                    pointerCount = 1,
+                                    changedIndex = 0,
+                                    pointers = listOf(
+                                        PointerEntry(0, TouchAction.UP, it.first, it.second)
+                                    )
+                                )
+                            )
+                        }
+                        isDragging = false
+                    } else {
+                        // Hızlı Dokunup Bırakma (< 300 ms, hareket yok) = SOL TIK (Tıklama)!
+                        val coords = TouchCoordinateMapper.mapTouchToNormalized(
+                            event.x, event.y, viewWidth, viewHeight, lastStreamWidth, lastStreamHeight
+                        )
+                        coords?.let {
+                            touchChannel.trySend(
+                                TouchEventMessage(
+                                    pointerCount = 1,
+                                    changedIndex = 0,
+                                    pointers = listOf(
+                                        PointerEntry(0, TouchAction.LEFT_CLICK, it.first, it.second)
+                                    )
+                                )
+                            )
+                            binding.root.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                            Log.d("SecondScreenTouch", "Single Tap -> Left Click at (${it.first}, ${it.second})")
+                        }
+                    }
+                    return true
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    longPressJob?.cancel()
+                    if (isDragging) {
+                        touchChannel.trySend(
+                            TouchEventMessage(
+                                pointerCount = 1,
+                                changedIndex = 0,
+                                pointers = listOf(
+                                    PointerEntry(0, TouchAction.CANCEL, 0, 0)
+                                )
+                            )
+                        )
+                        isDragging = false
+                    }
+                    return true
+                }
+            }
+        }
+
+        return false
     }
 
     private fun startDiscovery() {
@@ -302,6 +683,10 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 }
                 binding.txtBanner.visibility = View.GONE
                 binding.hudOverlay.visibility = View.GONE
+                binding.btnToggleKeyboard.visibility = View.GONE
+                if (isKeyboardVisible) {
+                    toggleSoftKeyboard()
+                }
             }
         }
     }
@@ -318,6 +703,10 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
         binding.controlOverlay.visibility = View.VISIBLE
         binding.txtBanner.visibility = View.GONE
         binding.hudOverlay.visibility = View.GONE
+        binding.btnToggleKeyboard.visibility = View.GONE
+        if (isKeyboardVisible) {
+            toggleSoftKeyboard()
+        }
     }
 
     private suspend fun runStreamingSession(host: String, port: Int) = kotlinx.coroutines.coroutineScope {
@@ -382,6 +771,39 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 }
                 binding.txtBanner.text = "Yayın Aktif: ${ack.streamWidth}x${ack.streamHeight} [$modeLabel]"
                 binding.hudOverlay.visibility = View.VISIBLE
+                binding.btnToggleKeyboard.visibility = View.VISIBLE
+            }
+
+            isStreamingActive = true
+
+            // Touch Sender loop (ultra-low latency, non-blocking via Channel)
+            val touchSenderJob = launch(Dispatchers.IO) {
+                var touchSeq = 5000
+                for (touchMsg in touchChannel) {
+                    if (!isActive || !transport.isConnected) break
+                    val payload = touchMsg.toByteArray()
+                    val header = FrameHeader.create(
+                        MessageType.TOUCH_EVENT,
+                        payload.size.toLong(),
+                        sequence = touchSeq++
+                    )
+                    transport.sendPacket(header, payload)
+                }
+            }
+
+            // Keyboard Sender loop (Moonlight style soft keyboard input)
+            val keyboardSenderJob = launch(Dispatchers.IO) {
+                var keySeq = 8000
+                for (keyMsg in keyboardChannel) {
+                    if (!isActive || !transport.isConnected) break
+                    val payload = keyMsg.toByteArray()
+                    val header = FrameHeader.create(
+                        MessageType.KEYBOARD_EVENT,
+                        payload.size.toLong(),
+                        sequence = keySeq++
+                    )
+                    transport.sendPacket(header, payload)
+                }
             }
 
             // 5. HUD update loop (every 300 ms)
@@ -485,6 +907,9 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                     }
                 }
             } finally {
+                isStreamingActive = false
+                touchSenderJob.cancel()
+                while (touchChannel.tryReceive().isSuccess) {}
                 hudJob.cancel()
                 pingJob.cancel()
             }

@@ -33,6 +33,7 @@ public enum MessageType : byte
     VideoFrame = 0x11,
     KeyframeReq = 0x12,
     TouchEvent = 0x20,
+    KeyboardEvent = 0x21,
     Ping = 0x30,
     Pong = 0x31,
     Error = 0xF0,

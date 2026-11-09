@@ -267,4 +267,71 @@ public class ProtocolTests
         Assert.True(frame.IsKeyframe);
         Assert.Equal(10, frame.NalData.Length);
     }
+
+    [Fact]
+    public void TouchEventMessage_SinglePointer_SerializesAndDeserializesCorrectly()
+    {
+        var pointers = new[]
+        {
+            new PointerEntry(PointerId: 0, Action: TouchAction.Down, NormalizedX: 32768, NormalizedY: 16384, ContactRadius: 40)
+        };
+        var touchMsg = new TouchEventMessage(PointerCount: 1, ChangedIndex: 0, Pointers: pointers);
+
+        byte[] buffer = new byte[touchMsg.PayloadSize];
+        touchMsg.WritePayloadTo(buffer);
+
+        Assert.Equal(10, buffer.Length); // 2 + 1 * 8
+
+        var parsed = TouchEventMessage.ReadPayloadFrom(buffer);
+        Assert.Equal(1, parsed.PointerCount);
+        Assert.Equal(0, parsed.ChangedIndex);
+        Assert.Single(parsed.Pointers);
+        Assert.Equal(0, parsed.Pointers[0].PointerId);
+        Assert.Equal(TouchAction.Down, parsed.Pointers[0].Action);
+        Assert.Equal((ushort)32768, parsed.Pointers[0].NormalizedX);
+        Assert.Equal((ushort)16384, parsed.Pointers[0].NormalizedY);
+        Assert.Equal((ushort)40, parsed.Pointers[0].ContactRadius);
+    }
+
+    [Fact]
+    public void TouchEventMessage_MultiPointer_SerializesAndDeserializesCorrectly()
+    {
+        var pointers = new[]
+        {
+            new PointerEntry(PointerId: 0, Action: TouchAction.Move, NormalizedX: 1000, NormalizedY: 2000, ContactRadius: 20),
+            new PointerEntry(PointerId: 1, Action: TouchAction.Down, NormalizedX: 65535, NormalizedY: 65535, ContactRadius: 50)
+        };
+        var touchMsg = new TouchEventMessage(PointerCount: 2, ChangedIndex: 1, Pointers: pointers);
+
+        byte[] buffer = new byte[touchMsg.PayloadSize];
+        touchMsg.WritePayloadTo(buffer);
+
+        Assert.Equal(18, buffer.Length); // 2 + 2 * 8
+
+        var parsed = TouchEventMessage.ReadPayloadFrom(buffer);
+        Assert.Equal(2, parsed.PointerCount);
+        Assert.Equal(1, parsed.ChangedIndex);
+        Assert.Equal(2, parsed.Pointers.Length);
+        Assert.Equal(1, parsed.Pointers[1].PointerId);
+        Assert.Equal(TouchAction.Down, parsed.Pointers[1].Action);
+        Assert.Equal((ushort)65535, parsed.Pointers[1].NormalizedX);
+        Assert.Equal((ushort)65535, parsed.Pointers[1].NormalizedY);
+    }
+
+    [Fact]
+    public void KeyboardEventMessage_RoundTrip_MatchesValues()
+    {
+        var original = new KeyboardEventMessage(KeyCode: (ushort)'A', Flags: (byte)(KeyboardFlags.KeyDown | KeyboardFlags.IsUnicode));
+        byte[] buffer = new byte[KeyboardEventMessage.PayloadSize];
+        original.WritePayloadTo(buffer);
+
+        Assert.Equal(3, buffer.Length);
+
+        var parsed = KeyboardEventMessage.ReadPayloadFrom(buffer);
+        Assert.Equal((ushort)'A', parsed.KeyCode);
+        Assert.True(parsed.IsKeyDown);
+        Assert.True(parsed.IsUnicode);
+        Assert.False(parsed.HasShift);
+        Assert.False(parsed.HasCtrl);
+    }
 }

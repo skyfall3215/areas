@@ -199,14 +199,25 @@ Tablet ilk bağlandığında, arka plandan geri döndüğünde veya paket kaybı
 | Ofset | Alan Adı | Tip | Açıklama |
 | :--- | :--- | :--- | :--- |
 | `0` | `PointerId` | `u8` | Parmağın benzersiz kimliği (`0` .. `9`, parmak kalkana kadar sabit kalır) |
-| `1` | `Action` | `u8` | `0x01` = `DOWN` (Dokundu)<br>`0x02` = `MOVE` (Hareket ediyor)<br>`0x03` = `UP` (Kalktı)<br>`0x04` = `CANCEL` (İptal edildi) |
+| `1` | `Action` | `u8` | `0x01` = `DOWN` (Dokundu)<br>`0x02` = `MOVE` (Hareket ediyor)<br>`0x03` = `UP` (Kalktı)<br>`0x04` = `CANCEL` (İptal edildi)<br>`0x05` = `SCROLL` (İki parmakla kaydırma; `NormalizedY` signed delta)<br>`0x06` = `RIGHT_CLICK` (Sağ tık - uzun basma veya 2 parmak dokunma)<br>`0x07` = `LEFT_CLICK` (Sol tık - hızlı dokunup bırakma) |
 | `2..3` | `NormalizedX` | `u16` | Yatay konum (`0` = En Sol, `65535` = En Sağ) |
-| `4..5` | `NormalizedY` | `u16` | Dikey konum (`0` = En Üst, `65535` = En Alt) |
+| `4..5` | `NormalizedY` | `u16` | Dikey konum (`0` = En Üst, `65535` = En Alt; SCROLL için signed 16-bit delta) |
 | `6..7` | `ContactRadius` | `u16` | Parmak temas alanı büyüklüğü (isteğe bağlı, varsayılan `0`) |
 
 ---
 
-### 5.4. Gecikme Ölçümü Mesajları (`0x30 PING` & `0x31 PONG` — Aşama 2)
+### 5.4. Klavye Olayı Mesajı (`0x21 KEYBOARD_EVENT` — Moonlight Tarzı Sanal Klavye)
+
+Tabletteki sanal klavyeden (IME) veya 3 parmak dokunuşuyla / yüzen klavye butonuyla girilen karakter ve tuşları Windows Host tarafına aktarmak için kullanılır. Gövde uzunluğu **3 bayttır**:
+
+| Gövde Ofseti | Alan Adı | Tip | Açıklama |
+| :--- | :--- | :--- | :--- |
+| `0..1` | `KeyCode` | `u16` | Unicode karakter kodu (UTF-16; örn. Türkçe `ç, ğ, ı, ö, ş, ü`) veya Win32 Sanal Tuş Kodu (`0x08` = Backspace, `0x0D` = Enter, `0x09` = Tab, `0x1B` = Esc) |
+| `2` | `Flags` | `u8` | Bayraklar:<br>`0x01` = `KEY_DOWN` (Tuşa basıldı; yoksa tuş bırakıldı)<br>`0x02` = `IS_UNICODE` (`KeyCode` bir Unicode karakteridir, `KEYEVENTF_UNICODE` ile enjekte edilir)<br>`0x04` = `SHIFT`<br>`0x08` = `CTRL`<br>`0x10` = `ALT` |
+
+---
+
+### 5.5. Gecikme Ölçümü Mesajları (`0x30 PING` & `0x31 PONG` — Aşama 2)
 
 Ağ gecikmesini (Round-Trip Time / RTT) ölçmek ve bağlantının koptuğunu (Dead Peer) anlamak için kullanılır. Gövde uzunluğu **8 bayttır**:
 
@@ -221,7 +232,7 @@ Ağ gecikmesini (Round-Trip Time / RTT) ölçmek ve bağlantının koptuğunu (D
 
 ---
 
-### 5.5. Hata ve Kapatma Mesajları (`0xF0 ERROR` & `0xFF DISCONNECT`)
+### 5.6. Hata ve Kapatma Mesajları (`0xF0 ERROR` & `0xFF DISCONNECT`)
 
 #### `0xF0 ERROR` (Gövde: `2 + N` Bayt)
 | Gövde Ofseti | Alan Adı | Tip | Açıklama |
