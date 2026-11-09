@@ -479,14 +479,27 @@ public sealed class SecondScreenServer : IDisposable
                                  d.DeviceName.Contains("DISPLAY13", StringComparison.OrdinalIgnoreCase));
     }
 
+    private static string GetDriverDirectory()
+    {
+        var localDir = Path.Combine(AppContext.BaseDirectory, "VirtualDisplayDriver");
+        if (File.Exists(Path.Combine(localDir, "devcon.exe")))
+            return localDir;
+        if (Directory.Exists(@"C:\VirtualDisplayDriver") && File.Exists(@"C:\VirtualDisplayDriver\devcon.exe"))
+            return @"C:\VirtualDisplayDriver";
+        return localDir;
+    }
+
     public static async Task InstallVirtualDisplayDriverAsync()
     {
         await Task.Run(() =>
         {
+            var driverDir = GetDriverDirectory();
+            var devcon = Path.Combine(driverDir, "devcon.exe");
+            var inf = Path.Combine(driverDir, "MttVDD.inf");
             var psi = new ProcessStartInfo
             {
                 FileName = "cmd.exe",
-                Arguments = "/c \"C:\\VirtualDisplayDriver\\devcon.exe install C:\\VirtualDisplayDriver\\MttVDD.inf Root\\MttVDD\"",
+                Arguments = $"/c \"\"{devcon}\" install \"{inf}\" Root\\MttVDD\"",
                 Verb = "runas",
                 UseShellExecute = true,
                 CreateNoWindow = true
@@ -500,10 +513,12 @@ public sealed class SecondScreenServer : IDisposable
     {
         await Task.Run(() =>
         {
+            var driverDir = GetDriverDirectory();
+            var devcon = Path.Combine(driverDir, "devcon.exe");
             var psi = new ProcessStartInfo
             {
                 FileName = "cmd.exe",
-                Arguments = "/c \"C:\\VirtualDisplayDriver\\devcon.exe remove Root\\MttVDD\"",
+                Arguments = $"/c \"\"{devcon}\" remove Root\\MttVDD\"",
                 Verb = "runas",
                 UseShellExecute = true,
                 CreateNoWindow = true
