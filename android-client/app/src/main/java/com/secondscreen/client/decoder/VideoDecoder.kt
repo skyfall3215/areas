@@ -15,11 +15,23 @@ class VideoDecoder(private val surface: Surface) : AutoCloseable {
     }
 
     private var codec: MediaCodec? = null
-    private var isConfigured = false
+    var isConfigured = false
+        private set
     private val bufferInfo = MediaCodec.BufferInfo()
+    private var lastWidth = 0
+    private var lastHeight = 0
+    private var lastSpsPps: ByteArray? = null
 
     fun configure(width: Int, height: Int, spsPpsData: ByteArray) {
+        if (isConfigured && codec != null && lastWidth == width && lastHeight == height && lastSpsPps != null && lastSpsPps.contentEquals(spsPpsData)) {
+            Log.d(TAG, "Decoder already configured with matching parameters, skipping recreate")
+            return
+        }
+
         close()
+        lastWidth = width
+        lastHeight = height
+        lastSpsPps = spsPpsData.clone()
 
         try {
             val format = MediaFormat.createVideoFormat(MIME_TYPE, width, height)
@@ -101,6 +113,7 @@ class VideoDecoder(private val surface: Surface) : AutoCloseable {
 
     override fun close() {
         isConfigured = false
+        lastSpsPps = null
         try {
             codec?.stop()
         } catch (_: Exception) {}

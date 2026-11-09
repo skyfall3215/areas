@@ -213,15 +213,22 @@ data class PingMessage(val pingId: Long, val originTimeUs: Long) {
     }
 }
 
-data class PongMessage(val pingId: Long, val originTimeUs: Long) {
+data class PongMessage(
+    val pingId: Long,
+    val originTimeUs: Long,
+    val sentBitrateKbps: Long = 0,
+    val sentPacketsCount: Long = 0
+) {
     companion object {
-        const val PAYLOAD_SIZE = 8
+        const val PAYLOAD_SIZE = 16
 
         fun readPayloadFrom(buffer: ByteBuffer): PongMessage {
             buffer.order(ByteOrder.BIG_ENDIAN)
             val id = buffer.int.toLong() and 0xFFFFFFFFL
             val time = buffer.int.toLong() and 0xFFFFFFFFL
-            return PongMessage(id, time)
+            val bitrate = if (buffer.remaining() >= 8) (buffer.int.toLong() and 0xFFFFFFFFL) else 0L
+            val packets = if (buffer.remaining() >= 4) (buffer.int.toLong() and 0xFFFFFFFFL) else 0L
+            return PongMessage(id, time, bitrate, packets)
         }
     }
 
@@ -230,6 +237,8 @@ data class PongMessage(val pingId: Long, val originTimeUs: Long) {
         val buf = ByteBuffer.wrap(bytes).order(ByteOrder.BIG_ENDIAN)
         buf.putInt((pingId and 0xFFFFFFFFL).toInt())
         buf.putInt((originTimeUs and 0xFFFFFFFFL).toInt())
+        buf.putInt((sentBitrateKbps and 0xFFFFFFFFL).toInt())
+        buf.putInt((sentPacketsCount and 0xFFFFFFFFL).toInt())
         return bytes
     }
 }

@@ -60,6 +60,29 @@
                 android:textStyle="bold"
                 android:visibility="gone" />
 
+            <!-- Bitrate Limit Selector -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Bit Hızı Sınırı:"
+                    android:textColor="#CCCCCC"
+                    android:textSize="12sp" />
+
+                <Spinner
+                    android:id="@+id/spinnerBitrate"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:backgroundTint="#00E676" />
+            </LinearLayout>
+
             <!-- Mode 1: USB-C -->
             <Button
                 android:id="@+id/btnConnectUsb"
@@ -68,6 +91,16 @@
                 android:layout_marginTop="16dp"
                 android:backgroundTint="@color/primary"
                 android:text="@string/btn_connect_usb"
+                android:textColor="@color/white" />
+
+            <!-- Mode 2: Mobile Hotspot (Direct Wireless 192.168.137.1) -->
+            <Button
+                android:id="@+id/btnConnectHotspot"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:backgroundTint="#EF6C00"
+                android:text="@string/btn_connect_hotspot"
                 android:textColor="@color/white" />
 
             <!-- Divider -->
@@ -177,8 +210,8 @@
         android:layout_height="wrap_content"
         android:layout_gravity="top|end"
         android:layout_margin="12dp"
-        android:background="#B0101010"
-        android:elevation="6dp"
+        android:background="#E0111111"
+        android:elevation="8dp"
         android:orientation="vertical"
         android:paddingStart="12dp"
         android:paddingTop="8dp"
@@ -191,7 +224,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:fontFamily="monospace"
-            android:text="HUD [Gecikme &amp; FPS]"
+            android:text="HUD [Gecikme &amp; Telemetri]"
             android:textColor="#AAAAAA"
             android:textSize="10sp"
             android:textStyle="bold" />
@@ -202,10 +235,19 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="2dp"
             android:fontFamily="monospace"
-            android:text="FPS: -- | Bitrate: -- Mbps"
+            android:text="FPS: -- | Alınan: -- Mbps"
             android:textColor="#00E676"
             android:textSize="12sp"
             android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/txtHudSentBitrate"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:fontFamily="monospace"
+            android:text="Gönderilen: -- Mbps (0 pkt)"
+            android:textColor="#81C784"
+            android:textSize="11sp" />
 
         <TextView
             android:id="@+id/txtHudEncode"
@@ -234,6 +276,17 @@
             android:textColor="#FFCA28"
             android:textSize="11sp" />
 
+        <TextView
+            android:id="@+id/txtHudLoss"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:fontFamily="monospace"
+            android:text="Kayıp: 0 pkt | Atılan: 0 | IDR: 0"
+            android:textColor="#FF5252"
+            android:textSize="11sp"
+            android:textStyle="bold" />
+
         <View
             android:layout_width="match_parent"
             android:layout_height="1dp"
@@ -246,7 +299,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:fontFamily="monospace"
-            android:text="Pipeline: -- ms"
+            android:text="Tahmini Gecikme: -- ms"
             android:textColor="#FF80AB"
             android:textSize="12sp"
             android:textStyle="bold" />

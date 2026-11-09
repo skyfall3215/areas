@@ -4,6 +4,8 @@ import com.secondscreen.client.protocol.FrameHeader
 import com.secondscreen.client.protocol.PacketParser
 import com.secondscreen.client.protocol.PacketSerializer
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
@@ -24,6 +26,7 @@ class SocketTransport(
     private var socket: Socket? = null
     private var inputStream: BufferedInputStream? = null
     private var outputStream: BufferedOutputStream? = null
+    private val sendMutex = Mutex()
 
     override val isConnected: Boolean
         get() = socket?.isConnected == true && socket?.isClosed == false
@@ -54,7 +57,9 @@ class SocketTransport(
 
     override suspend fun sendPacket(header: FrameHeader, payload: ByteArray) = withContext(Dispatchers.IO) {
         val os = outputStream ?: throw IllegalStateException("Transport not connected")
-        PacketSerializer.writePacket(os, header, payload)
+        sendMutex.withLock {
+            PacketSerializer.writePacket(os, header, payload)
+        }
     }
 
     override suspend fun receivePacket(): Pair<FrameHeader, ByteArray> = withContext(Dispatchers.IO) {

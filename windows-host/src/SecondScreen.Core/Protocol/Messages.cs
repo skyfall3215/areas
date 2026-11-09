@@ -218,25 +218,36 @@ public sealed record PingMessage(uint PingId, uint OriginTimeUs)
     }
 }
 
-public sealed record PongMessage(uint PingId, uint OriginTimeUs)
+public sealed record PongMessage(
+    uint PingId,
+    uint OriginTimeUs,
+    uint SentBitrateKbps = 0,
+    uint SentPacketsCount = 0)
 {
-    public const int PayloadSize = 8;
+    public const int PayloadSize = 16;
 
     public void WritePayloadTo(Span<byte> destination)
     {
-        if (destination.Length < PayloadSize)
+        if (destination.Length < 8)
             throw new ArgumentException("Buffer too small for PongMessage payload.", nameof(destination));
         BinaryPrimitives.WriteUInt32BigEndian(destination[0..4], PingId);
         BinaryPrimitives.WriteUInt32BigEndian(destination[4..8], OriginTimeUs);
+        if (destination.Length >= 16)
+        {
+            BinaryPrimitives.WriteUInt32BigEndian(destination[8..12], SentBitrateKbps);
+            BinaryPrimitives.WriteUInt32BigEndian(destination[12..16], SentPacketsCount);
+        }
     }
 
     public static PongMessage ReadPayloadFrom(ReadOnlySpan<byte> source)
     {
-        if (source.Length < PayloadSize)
+        if (source.Length < 8)
             throw new ArgumentException("Buffer too small for PongMessage payload.", nameof(source));
         uint id = BinaryPrimitives.ReadUInt32BigEndian(source[0..4]);
         uint time = BinaryPrimitives.ReadUInt32BigEndian(source[4..8]);
-        return new PongMessage(id, time);
+        uint bitrate = source.Length >= 16 ? BinaryPrimitives.ReadUInt32BigEndian(source[8..12]) : 0;
+        uint packets = source.Length >= 16 ? BinaryPrimitives.ReadUInt32BigEndian(source[12..16]) : 0;
+        return new PongMessage(id, time, bitrate, packets);
     }
 }
 

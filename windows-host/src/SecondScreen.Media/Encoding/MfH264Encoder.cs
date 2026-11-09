@@ -269,8 +269,13 @@ public sealed class MfH264Encoder : IDisposable
             _cachedSpsPps = spsPps;
             isKeyframe = true;
         }
+        else if (isKeyframe && _cachedSpsPps != null)
+        {
+            spsPps = _cachedSpsPps;
+        }
 
-        byte[] frameData = frameStream.Length > 0 ? frameStream.ToArray() : raw;
+        // On keyframes, include full bitstream (SPS + PPS + IDR) so receiver decodes self-contained
+        byte[] frameData = isKeyframe ? raw : (frameStream.Length > 0 ? frameStream.ToArray() : raw);
 
         return new EncodedPacket
         {

@@ -249,11 +249,18 @@ Kablosuz bağlantılar (LAN, Hotspot, Wi-Fi Direct) her an kopabilir. İki taraf
 
 ---
 
-## 7. Doğrulanmamış / Deneysel Protokol Noktaları
+## 7. Video Akışı ve Bit Hızı Yönetimi
 
-> [!WARNING]
-> **DOĞRULANMADI — Wi-Fi Üzerinde TCP vs UDP Video Taşıma Kararı:**
-> - **Mevcut Tasarım:** Hem kontrol (`HELLO`, `TOUCH_EVENT`) hem de video (`VIDEO_FRAME`) paketleri aynı `ITransport` (TCP `NoDelay`) hattı üzerinden akar. USB-C ve yakın mesafe 5 GHz Hotspot modunda bu yöntem sıfır paket kaybıyla en temiz sonucu verir.
-> - **Risk:** Yurt ortamında yoğun radyo paraziti varsa TCP'nin kayıp bir paketi tekrar göndermeye çalışması (Retransmission) arkadan gelen yeni video karelerini 50–150 ms bekletebilir (Head-of-Line Blocking).
-> - **Doğrulama Planı:** Aşama 3 ve Aşama 4 testlerinde HUD üzerindeki `RTT` dalgalanması (Jitter) ölçülecektir. Eğer kablosuz modda anlık takılmalar görülürse, `HELLO`, `VIDEO_CONFIG` ve `TOUCH_EVENT` mesajları TCP'de bırakılıp, yalnızca `0x11 VIDEO_FRAME` mesajları için 1400 baytlık parçalama (MTU Fragmentation) başlığı içeren opsiyonel bir UDP kanalı eklenecektir (**DOĞRULANMADI**).
+1. **Taşıma Protokolü (TCP NoDelay - Port 27183):**
+   - El sıkışma (`HELLO`, `HELLO_ACK`), ayarlar (`VIDEO_CONFIG`), kurtarma (`KEYFRAME_REQ`), video akışı (`VIDEO_FRAME`), dokunmatik (`TOUCH_EVENT`) ve `PING`/`PONG` mesajları optimize edilmiş, gecikmesiz TCP (TCP_NODELAY) üzerinden akar.
+2. **Ayarlanabilir Bit Hızı Sınırı:**
+   - Tablet arayüzünden yayın bit hızı sınırı seçilebilir (`10`, `15`, `20`, `30`, `40` Mbps). Varsayılan değer **15 Mbps**'dir.
+   - `HELLO` paketindeki `PreferredBitrateKbps` alanı vericiye iletilir ve donanımsal H.264 kodlayıcı bu sınır ile başlatılır.
+3. **Anahtar Kare İsteği (IDR Recovery):**
+   - Donanımsal kod çözücü referans kaybı veya bozulma tespit ettiğinde TCP üzerinden `0x12 KEYFRAME_REQ` gönderir (en fazla 500 ms'de 1 istek hız limitiyle).
+   - Verici bu isteği aldığında anında tam bir `IDR` anahtar karesi üretir.
+4. **Her Anahtar Karede SPS/PPS:**
+   - Her IDR karesinde hem NAL akışı içerisine in-band SPS/PPS iliştirilir hem de TCP üzerinden `0x10 VIDEO_CONFIG` iletilir.
+5. **Canlı Telemetri:**
+   - Alıcı HUD üzerinde FPS, alınan bit hızı, donanım encode süresi, ağ RTT/2 gecikmesi, donanım decode süresi ve toplam tahmini gecikmeyi canlı olarak gösterir.
 

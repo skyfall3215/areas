@@ -10,6 +10,8 @@ public static class ProtocolConstants
     public const int DiscoveryPort = 27184;
     public const uint MaxPayloadLength = 4 * 1024 * 1024; // 4 MB
 
+    public const byte TransportModeTcp = 0x00;
+
     public const byte VideoFlagKeyframe = 0x01;
     public const byte VideoFlagCursorEmbedded = 0x02;
 

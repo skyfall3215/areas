@@ -7,17 +7,25 @@ import java.util.concurrent.atomic.AtomicLong
 data class TelemetrySnapshot(
     val fps: Int,
     val bitrateMbps: Double,
+    val sentBitrateMbps: Double = 0.0,
+    val sentPacketsCount: Long = 0,
     val captureMs: Double,
     val encodeMs: Double,
     val networkRttDiv2Ms: Double,
     val decodeMs: Double,
-    val estimatedPipelineMs: Double
+    val estimatedPipelineMs: Double,
+    val lostPackets: Long = 0,
+    val droppedFrames: Long = 0,
+    val idrRequests: Long = 0
 )
 
 class TelemetryTracker {
 
     private val startTimeNs = System.nanoTime()
     private val nextPingId = AtomicLong(1)
+    private val lostPacketsCount = AtomicLong(0)
+    private val droppedFramesCount = AtomicLong(0)
+    private val idrRequestsCount = AtomicLong(0)
 
     private var frameCount = 0
     private var totalBytesInPeriod = 0L
@@ -25,6 +33,8 @@ class TelemetryTracker {
 
     private var currentFps = 0
     private var currentBitrateMbps = 0.0
+    private var hostSentBitrateMbps = 0.0
+    private var hostSentPacketsCount = 0L
 
     private var lastCaptureMs = 0.0
     private var lastEncodeMs = 0.0
@@ -38,6 +48,26 @@ class TelemetryTracker {
 
     val currentTimeUs: Long
         get() = (System.nanoTime() - startTimeNs) / 1000L
+
+    fun onPacketsLost(count: Int) {
+        lostPacketsCount.addAndGet(count.toLong())
+    }
+
+    fun onFrameDropped() {
+        droppedFramesCount.incrementAndGet()
+    }
+
+    fun onIdrRequested() {
+        idrRequestsCount.incrementAndGet()
+    }
+
+    fun resetCounters() {
+        lostPacketsCount.set(0)
+        droppedFramesCount.set(0)
+        idrRequestsCount.set(0)
+        hostSentBitrateMbps = 0.0
+        hostSentPacketsCount = 0L
+    }
 
     @Synchronized
     fun onFrameDecoded(captureDurationUs: Int, encodeDurationUs: Int, decodeDurationNs: Long, payloadBytes: Int) {
@@ -88,6 +118,12 @@ class TelemetryTracker {
             val oneWay = rttMs / 2.0
             lastNetworkRttDiv2Ms = if (lastNetworkRttDiv2Ms == 0.0) oneWay else (lastNetworkRttDiv2Ms * 0.8 + oneWay * 0.2)
         }
+        if (pong.sentBitrateKbps > 0) {
+            hostSentBitrateMbps = pong.sentBitrateKbps / 1000.0
+        }
+        if (pong.sentPacketsCount > 0) {
+            hostSentPacketsCount = pong.sentPacketsCount
+        }
     }
 
     @Synchronized
@@ -96,11 +132,16 @@ class TelemetryTracker {
         return TelemetrySnapshot(
             fps = currentFps,
             bitrateMbps = currentBitrateMbps,
+            sentBitrateMbps = hostSentBitrateMbps,
+            sentPacketsCount = hostSentPacketsCount,
             captureMs = avgCaptureMs,
             encodeMs = avgEncodeMs,
             networkRttDiv2Ms = lastNetworkRttDiv2Ms,
             decodeMs = avgDecodeMs,
-            estimatedPipelineMs = estimatedTotal
+            estimatedPipelineMs = estimatedTotal,
+            lostPackets = lostPacketsCount.get(),
+            droppedFrames = droppedFramesCount.get(),
+            idrRequests = idrRequestsCount.get()
         )
     }
 }

@@ -1,6 +1,7 @@
 <resources>
     <string name="app_name">İkinci Ekran</string>
     <string name="btn_connect_usb">USB ile Bağlan (127.0.0.1)</string>
+    <string name="btn_connect_hotspot">Mobil Hotspot ile Bağlan (192.168.137.1)</string>
     <string name="btn_connect_wifi">Wi-Fi ile Bağlan</string>
     <string name="btn_cancel">İptal</string>
     <string name="hint_ip_address">PC IP (Örn: 192.168.1.50)</string>

@@ -9,6 +9,8 @@ object ProtocolConstants {
     const val DISCOVERY_PORT = 27184
     const val MAX_PAYLOAD_LENGTH = 4L * 1024 * 1024 // 4 MB
 
+    const val TRANSPORT_MODE_TCP: Byte = 0x00
+
     const val VIDEO_FLAG_KEYFRAME: Byte = 0x01
     const val VIDEO_FLAG_CURSOR_EMBEDDED: Byte = 0x02
 

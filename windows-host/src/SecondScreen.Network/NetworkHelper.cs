@@ -60,7 +60,7 @@ public static class NetworkHelper
             catch { }
         }
 
-        return addresses.Distinct().ToList();
+        return HotspotManager.PrioritizeAddresses(addresses);
     }
 }
 

@@ -44,7 +44,7 @@ public static class Program
         };
 
         Console.WriteLine("=================================================");
-        Console.WriteLine(" SecondScreen Windows Host - Aşama 3 (Wi-Fi LAN + USB)");
+        Console.WriteLine(" SecondScreen Windows Host - Aşama 4 (Hotspot + Wi-Fi + USB)");
         Console.WriteLine("=================================================");
         Console.WriteLine();
 
@@ -55,7 +55,7 @@ public static class Program
             LatencyStopwatchForm.ShowInThread();
         }
 
-        // Background listener for 'T' key to open stopwatch
+        // Background listener for 'T' (Stopwatch) and 'H' (Hotspot Settings)
         _ = Task.Run(() =>
         {
             while (!Cts.Token.IsCancellationRequested)
@@ -68,12 +68,17 @@ public static class Program
                         Console.WriteLine("[+] Gecikme test kronometresi açılıyor...");
                         LatencyStopwatchForm.ShowInThread();
                     }
+                    else if (key.Key == ConsoleKey.H)
+                    {
+                        Console.WriteLine("[+] Windows Mobil Etkin Nokta ayarları açılıyor...");
+                        HotspotManager.OpenHotspotSettings();
+                    }
                 }
                 Thread.Sleep(100);
             }
         });
 
-        Console.WriteLine("[İPUCU] Uçtan uca gecikmeyi kamera ile ölçmek için 'T' tuşuna basın (Kronometre açılır).");
+        Console.WriteLine("[İPUCU] Kronometre için 'T' tuşuna, Hotspot ayarları için 'H' tuşuna basın.");
         Console.WriteLine();
 
         // 1. ADB Reverse (USB-C Mode)
@@ -87,13 +92,27 @@ public static class Program
         {
             Console.ForegroundColor = ConsoleColor.Yellow;
             Console.WriteLine($"[BİLGİ] {adbMessage}");
-            Console.WriteLine("USB kablosu takılı değilse Wi-Fi LAN modunu kullanabilirsiniz.");
+            Console.WriteLine("USB kablosu takılı değilse Wi-Fi veya Hotspot modunu kullanabilirsiniz.");
             Console.ResetColor();
         }
 
-        // 2. Discover local IP addresses for Wi-Fi LAN
+        // 2. Discover local IP addresses for Wi-Fi LAN & Hotspot
         var localIps = NetworkHelper.GetLocalIPv4Addresses();
-        Console.WriteLine("[2/4] Yerel Ağ (Wi-Fi LAN) adresleri:");
+        Console.WriteLine("[2/4] Kullanılabilir Ağ Arayüzleri:");
+        bool hotspotActive = HotspotManager.IsHotspotActive();
+        if (hotspotActive)
+        {
+            Console.ForegroundColor = ConsoleColor.Green;
+            Console.WriteLine($"      [★] Mobil Etkin Nokta (Hotspot): 192.168.137.1 (Yurt/Okul için en kararlı mod!)");
+            Console.ResetColor();
+        }
+        else
+        {
+            Console.ForegroundColor = ConsoleColor.DarkYellow;
+            Console.WriteLine($"      [i] Mobil Etkin Nokta kapalı. Açmak için 'H' tuşuna basın.");
+            Console.ResetColor();
+        }
+
         if (localIps.Count == 0)
         {
             Console.WriteLine("      (Etkin yerel ağ adaptörü bulunamadı)");
@@ -102,8 +121,9 @@ public static class Program
         {
             foreach (var ip in localIps)
             {
+                if (ip == HotspotManager.DefaultWindowsHotspotIp) continue;
                 Console.ForegroundColor = ConsoleColor.Cyan;
-                Console.WriteLine($"      -> IP: {ip} (Port: {ProtocolConstants.DefaultPort})");
+                Console.WriteLine($"      -> Wi-Fi LAN IP: {ip} (Port: {ProtocolConstants.DefaultPort})");
                 Console.ResetColor();
             }
         }
@@ -116,7 +136,7 @@ public static class Program
         // 4. Start TCP Listener on all interfaces (0.0.0.0)
         var listener = new TcpListener(IPAddress.Any, ProtocolConstants.DefaultPort);
         listener.Start();
-        Console.WriteLine($"[4/4] Sunucu 0.0.0.0:{ProtocolConstants.DefaultPort} üzerinde dinliyor (USB + Wi-Fi)...");
+        Console.WriteLine($"[4/4] Sunucu 0.0.0.0:{ProtocolConstants.DefaultPort} üzerinde dinliyor (USB + Wi-Fi + Hotspot)...");
         Console.WriteLine("Android tablet bağlantısı bekleniyor (Ctrl+C ile çıkış)...");
         Console.WriteLine();
 
@@ -127,11 +147,16 @@ public static class Program
                 using var tcpClient = await listener.AcceptTcpClientAsync(Cts.Token);
                 var remoteEp = tcpClient.Client.RemoteEndPoint?.ToString() ?? "Bilinmiyor";
                 bool isUsb = remoteEp.StartsWith("127.0.0.1") || remoteEp.StartsWith("[::1]");
+                bool isHotspot = HotspotManager.IsHotspotClient(remoteEp);
 
                 Console.ForegroundColor = ConsoleColor.Green;
                 if (isUsb)
                 {
                     Console.WriteLine($"[+] Tablet bağlandı: {remoteEp} [Mod: USB-C (adb reverse)]");
+                }
+                else if (isHotspot)
+                {
+                    Console.WriteLine($"[+] Tablet bağlandı: {remoteEp} [Mod: Mobil Etkin Nokta (Hotspot 192.168.137.1)]");
                 }
                 else
                 {
@@ -225,7 +250,13 @@ public static class Program
         encoder.Initialize(streamWidth, streamHeight, targetFps, (int)bitrateBps);
         Console.WriteLine("[+] Media Foundation H.264 Donanımsal/Düşük Gecikmeli Kodlayıcı hazır.");
 
+        var clientIp = (tcpClient.Client.RemoteEndPoint as IPEndPoint)?.Address ?? IPAddress.Loopback;
+        bool isUsbClient = clientIp.Equals(IPAddress.Loopback) || clientIp.Equals(IPAddress.IPv6Loopback);
+
+        Console.WriteLine($"[+] Taşıma Modu: STANDART (TCP NoDelay){(isUsbClient ? " [USB-C Kablo]" : " [Wi-Fi]")}");
+
         int sequence = 2;
+        uint sentFrameCount = 0;
 
         // 5. Background task for incoming packets (KEYFRAME_REQ, PING, PONG, DISCONNECT)
         var receiveTask = Task.Run(async () =>
@@ -245,7 +276,7 @@ public static class Program
                     {
                         // Reply with PONG immediately
                         var ping = PingMessage.ReadPayloadFrom(inPayload);
-                        var pong = rttTracker.CreatePong(ping);
+                        var pong = new PongMessage(ping.PingId, ping.OriginTimeUs, (uint)(bitrateBps / 1000), sentFrameCount);
                         byte[] pongPayload = new byte[PongMessage.PayloadSize];
                         pong.WritePayloadTo(pongPayload);
 
@@ -337,6 +368,7 @@ public static class Program
         // 8. Video Capture and Encoding Loop (Solid 60.0 FPS)
         uint frameNumber = 0;
         bool configSent = false;
+        byte[]? lastSpsPps = null;
         var stopwatch = Stopwatch.StartNew();
         byte[] testPatternBgra = new byte[streamWidth * streamHeight * 4];
 
@@ -390,7 +422,7 @@ public static class Program
 
                 if (encoded != null)
                 {
-                    // Send VIDEO_CONFIG on initial SPS/PPS or whenever it updates
+                    // Send VIDEO_CONFIG on initial frame and on every keyframe (Item 4)
                     if (encoded.SpsPpsConfig != null && (!configSent || encoded.IsKeyframe))
                     {
                         var cfgHeader = FrameHeader.Create(
@@ -400,11 +432,13 @@ public static class Program
                             timestampUs: (uint)frameStartUs);
                         await transport.SendPacketAsync(cfgHeader, encoded.SpsPpsConfig, sessionCts.Token);
                         configSent = true;
+                        lastSpsPps = encoded.SpsPpsConfig;
                     }
 
-                    // Push VIDEO_FRAME to decoupled queue
+                    // Push VIDEO_FRAME to decoupled TCP queue
+                    sentFrameCount = ++frameNumber;
                     var frameMsg = new VideoFrameMessage(
-                        FrameNumber: ++frameNumber,
+                        FrameNumber: frameNumber,
                         CaptureDurationUs: captureDurationUs,
                         EncodeDurationUs: encodeDurationUs,
                         NalData: encoded.Data,
