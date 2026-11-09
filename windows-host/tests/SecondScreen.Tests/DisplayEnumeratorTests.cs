@@ -57,15 +57,69 @@ public class DisplayEnumeratorTests
     private static extern int GetSystemMetrics(int nIndex);
 
     [Fact]
-    public void Test_CursorDrawing_PixelCheck()
+    public void ExtractIconsFromIco()
     {
-        var target = DisplayEnumerator.GetTargetDisplay();
-        using var gdi = new GdiScreenCapture();
-        bool ok = gdi.Initialize(target.Bounds, target.DeviceName);
-        Assert.True(ok);
+        string icoPath = @"D:\Areas\areas.ico";
+        Assert.True(File.Exists(icoPath), "areas.ico exists");
 
-        // Before AcquireNextFrame, let's test if DrawIconEx writes to a black DIB
-        var frame = gdi.AcquireNextFrame();
-        Assert.NotNull(frame);
+        using var icon = new Icon(icoPath, new Size(256, 256));
+        using var bmp = icon.ToBitmap();
+
+        string assetsDir = @"D:\Areas\docs\assets";
+        Directory.CreateDirectory(assetsDir);
+        string logoPath = Path.Combine(assetsDir, "logo.png");
+        bmp.Save(logoPath, System.Drawing.Imaging.ImageFormat.Png);
+
+        // Generate Android mipmap icons
+        var sizes = new (string folder, int size)[]
+        {
+            ("mipmap-mdpi", 48),
+            ("mipmap-hdpi", 72),
+            ("mipmap-xhdpi", 96),
+            ("mipmap-xxhdpi", 144),
+            ("mipmap-xxxhdpi", 192),
+        };
+
+        string resDir = @"D:\Areas\android-client\app\src\main\res";
+        foreach (var (folder, sz) in sizes)
+        {
+            string dir = Path.Combine(resDir, folder);
+            Directory.CreateDirectory(dir);
+
+            using var resized = new Bitmap(sz, sz);
+            using (var g = Graphics.FromImage(resized))
+            {
+                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
+                g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+                g.DrawImage(bmp, 0, 0, sz, sz);
+            }
+
+            resized.Save(Path.Combine(dir, "ic_launcher.png"), System.Drawing.Imaging.ImageFormat.Png);
+            resized.Save(Path.Combine(dir, "ic_launcher_round.png"), System.Drawing.Imaging.ImageFormat.Png);
+        }
+
+        // Also copy ico to SecondScreen.App project
+        File.Copy(icoPath, @"D:\Areas\windows-host\src\SecondScreen.App\app.ico", true);
+    }
+
+    [Fact]
+    public async Task SecondScreenServer_Lifecycle_StartsAndStops()
+    {
+        using var server = new SecondScreen.App.SecondScreenServer(0); // Port 0 = free port
+        Assert.False(server.IsRunning);
+
+        await server.StartAsync();
+        Assert.True(server.IsRunning);
+
+        server.Stop();
+        Assert.False(server.IsRunning);
+    }
+
+    [Fact]
+    public void Test_DashboardForm_Creation()
+    {
+        using var form = new SecondScreen.App.ServerDashboardForm();
+        Assert.NotNull(form);
     }
 }

@@ -1,9 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net8.0-windows</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
 
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
@@ -26,6 +27,7 @@
     <ProjectReference Include="..\..\src\SecondScreen.Input\SecondScreen.Input.csproj" />
     <ProjectReference Include="..\..\src\SecondScreen.Media\SecondScreen.Media.csproj" />
     <ProjectReference Include="..\..\src\SecondScreen.Display\SecondScreen.Display.csproj" />
+    <ProjectReference Include="..\..\src\SecondScreen.App\SecondScreen.App.csproj" />
   </ItemGroup>
 
 </Project>
