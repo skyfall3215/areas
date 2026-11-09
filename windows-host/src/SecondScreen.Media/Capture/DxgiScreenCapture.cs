@@ -31,7 +31,7 @@ public sealed class DxgiScreenCapture : IDisposable
     public int Height => _height;
     public bool IsInitialized => _duplication != null;
 
-    public bool Initialize(int outputIndex = 0)
+    public bool Initialize(string? targetDeviceName = null, int outputIndex = 0)
     {
         Dispose();
         _isDisposed = false;
@@ -40,7 +40,9 @@ public sealed class DxgiScreenCapture : IDisposable
         using var factory = DXGI.CreateDXGIFactory1<IDXGIFactory1>();
         if (factory == null) return false;
 
-        // Try adapters (supports hybrid graphics: iGPU vs dGPU)
+        int globalOutCount = 0;
+
+        // Try adapters (supports hybrid graphics: iGPU vs dGPU + Virtual Display Driver)
         for (uint adapterIdx = 0; factory.EnumAdapters1(adapterIdx, out var adapter).Success; adapterIdx++)
         {
             using (adapter)
@@ -52,7 +54,25 @@ public sealed class DxgiScreenCapture : IDisposable
                 {
                     using (output)
                     {
-                        if (outIdx != (uint)outputIndex && outputIndex >= 0) continue;
+                        var outDesc = output.Description;
+                        string devName = outDesc.DeviceName ?? string.Empty;
+                        bool match = false;
+
+                        if (!string.IsNullOrEmpty(targetDeviceName))
+                        {
+                            match = devName.Equals(targetDeviceName, StringComparison.OrdinalIgnoreCase);
+                        }
+                        else if (outputIndex >= 0)
+                        {
+                            match = (globalOutCount == outputIndex) || (outIdx == (uint)outputIndex);
+                        }
+                        else
+                        {
+                            match = true;
+                        }
+
+                        globalOutCount++;
+                        if (!match) continue;
 
                         try
                         {
@@ -71,28 +91,36 @@ public sealed class DxgiScreenCapture : IDisposable
                                 out ID3D11Device device,
                                 out ID3D11DeviceContext context);
 
-                            if (hr.Failure) continue;
-
-                            _device = device;
-                            _context = context;
-
-                            using var output1 = output.QueryInterface<IDXGIOutput1>();
-                            if (output1 == null) continue;
-
-                            var duplication = output1.DuplicateOutput(_device);
-                            if (duplication == null)
+                            if (hr.Failure)
                             {
-                                _device?.Dispose();
-                                _context?.Dispose();
-                                _device = null;
-                                _context = null;
+                                Console.WriteLine($"[DxgiScreenCapture] D3D11CreateDevice failed for {devName} on {desc.Description}: {hr}");
                                 continue;
                             }
 
+                            using var output1 = output.QueryInterface<IDXGIOutput1>();
+                            if (output1 == null)
+                            {
+                                device.Dispose();
+                                context.Dispose();
+                                continue;
+                            }
+
+                            var duplication = output1.DuplicateOutput(device);
+                            if (duplication == null)
+                            {
+                                Console.WriteLine($"[DxgiScreenCapture] DuplicateOutput failed for {devName} on {desc.Description}");
+                                device.Dispose();
+                                context.Dispose();
+                                continue;
+                            }
+
+                            _device = device;
+                            _context = context;
                             _duplication = duplication;
-                            var outDesc = output.Description;
                             _width = outDesc.DesktopCoordinates.Right - outDesc.DesktopCoordinates.Left;
                             _height = outDesc.DesktopCoordinates.Bottom - outDesc.DesktopCoordinates.Top;
+
+                            Console.WriteLine($"[DxgiScreenCapture] Başarıyla yakalandı: {devName} ({_width}x{_height}) [{desc.Description}]");
 
                             // Pre-allocate zero-GC reusable pixel buffer
                             _reusableRgbaData = new byte[_width * _height * 4];
@@ -115,8 +143,9 @@ public sealed class DxgiScreenCapture : IDisposable
                             _stagingTexture = _device.CreateTexture2D(textureDesc);
                             return true;
                         }
-                        catch
+                        catch (Exception ex)
                         {
+                            Console.WriteLine($"[DxgiScreenCapture] Yakalama başlatma istisnası: {ex.Message}");
                             Dispose();
                         }
                     }

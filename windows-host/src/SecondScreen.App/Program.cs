@@ -202,9 +202,26 @@ public static class Program
         var hello = HelloMessage.ReadPayloadFrom(payload);
         Console.WriteLine($"[+] HELLO alındı: Cihaz='{hello.DeviceName}', Çözünürlük={hello.NativeWidth}x{hello.NativeHeight}@{hello.MaxFps}Hz, İstenenBitrate={hello.PreferredBitrateKbps} kbps");
 
-        // 2. Initialize Screen Capture to detect actual desktop resolution
-        using var capture = new DxgiScreenCapture();
-        bool captureOk = capture.Initialize();
+        // 1b. Enumerate Displays and identify Target Display (prioritizing 2nd/Virtual screen)
+        var allDisplays = SecondScreen.Display.DisplayEnumerator.GetDisplays();
+        Console.WriteLine($"[+] Sistemdeki Ekranlar ({allDisplays.Count} adet):");
+        foreach (var d in allDisplays)
+        {
+            Console.WriteLine($"    * [{d.Index}] {d.DeviceName} ({d.FriendlyName}) - {d.Bounds.Width}x{d.Bounds.Height} at ({d.Bounds.X},{d.Bounds.Y}) {(d.IsPrimary ? "[Ana]" : "[2. Ekran]")}");
+        }
+
+        var targetDisplay = SecondScreen.Display.DisplayEnumerator.GetTargetDisplay();
+        Console.WriteLine($"[+] Hedef Monitör Seçildi: {targetDisplay.DeviceName} ({targetDisplay.FriendlyName})");
+
+        // Ensure Windows extends the desktop to include the 2nd monitor
+        if (!targetDisplay.IsPrimary)
+        {
+            SecondScreen.Display.DisplayTopologyManager.ExtendDesktop();
+        }
+
+        // 2. Initialize Unified Screen Capture Engine (DXGI + GDI fallback for 2nd monitor)
+        using var capture = new SecondScreen.Media.Capture.ScreenCaptureEngine();
+        bool captureOk = capture.Initialize(targetDisplay.DeviceName, targetDisplay.Bounds);
 
         ushort streamWidth;
         ushort streamHeight;
@@ -212,7 +229,7 @@ public static class Program
         {
             streamWidth = (ushort)(capture.Width & ~1);
             streamHeight = (ushort)(capture.Height & ~1);
-            Console.WriteLine($"[+] DXGI Ekran Yakalama başlatıldı: {streamWidth}x{streamHeight}");
+            Console.WriteLine($"[+] Ekran Yakalama başlatıldı: {streamWidth}x{streamHeight}");
         }
         else
         {
@@ -221,7 +238,7 @@ public static class Program
             streamWidth = (ushort)(streamWidth & ~1);
             streamHeight = (ushort)(streamHeight & ~1);
             Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.WriteLine($"[!] DXGI yakalama başlatılamadı. Test deseni yayını: {streamWidth}x{streamHeight}");
+            Console.WriteLine($"[!] Ekran yakalama başlatılamadı. Test deseni yayını: {streamWidth}x{streamHeight}");
             Console.ResetColor();
         }
 
@@ -259,9 +276,10 @@ public static class Program
         uint sentFrameCount = 0;
 
         using var touchInjector = new SecondScreen.Input.Win32TouchInjector();
+        touchInjector.ScreenBounds = targetDisplay.Bounds;
         if (touchInjector.Initialize(10))
         {
-            Console.WriteLine("[+] Win32 Donanımsal Çoklu Dokunma Enjektörü hazır.");
+            Console.WriteLine($"[+] Win32 Donanımsal Çoklu Dokunma Enjektörü hazır. Hedef: {targetDisplay.Bounds.Width}x{targetDisplay.Bounds.Height} at ({targetDisplay.Bounds.X},{targetDisplay.Bounds.Y})");
         }
 
         var keyboardInjector = new SecondScreen.Input.Win32KeyboardInjector();

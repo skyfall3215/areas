@@ -24,6 +24,8 @@
     <ProjectReference Include="..\..\src\SecondScreen.Core\SecondScreen.Core.csproj" />
     <ProjectReference Include="..\..\src\SecondScreen.Network\SecondScreen.Network.csproj" />
     <ProjectReference Include="..\..\src\SecondScreen.Input\SecondScreen.Input.csproj" />
+    <ProjectReference Include="..\..\src\SecondScreen.Media\SecondScreen.Media.csproj" />
+    <ProjectReference Include="..\..\src\SecondScreen.Display\SecondScreen.Display.csproj" />
   </ItemGroup>
 
 </Project>

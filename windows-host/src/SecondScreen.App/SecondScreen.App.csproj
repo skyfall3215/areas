@@ -5,6 +5,7 @@
     <ProjectReference Include="..\SecondScreen.Media\SecondScreen.Media.csproj" />
     <ProjectReference Include="..\SecondScreen.Network\SecondScreen.Network.csproj" />
     <ProjectReference Include="..\SecondScreen.Input\SecondScreen.Input.csproj" />
+    <ProjectReference Include="..\SecondScreen.Display\SecondScreen.Display.csproj" />
   </ItemGroup>
 
   <PropertyGroup>
