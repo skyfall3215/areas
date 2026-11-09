@@ -1,6 +1,5 @@
 package com.secondscreen.client.ui
 
-import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
 import android.util.DisplayMetrics
@@ -17,15 +16,21 @@ import com.secondscreen.client.protocol.FrameHeader
 import com.secondscreen.client.protocol.HelloAckMessage
 import com.secondscreen.client.protocol.HelloMessage
 import com.secondscreen.client.protocol.MessageType
+import com.secondscreen.client.protocol.PingMessage
+import com.secondscreen.client.protocol.PongMessage
 import com.secondscreen.client.protocol.ProtocolConstants
 import com.secondscreen.client.protocol.VideoConfigMessage
 import com.secondscreen.client.protocol.VideoFrameMessage
+import com.secondscreen.client.telemetry.TelemetryTracker
 import com.secondscreen.client.transport.SocketTransport
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.nio.ByteBuffer
+import java.util.Locale
 
 class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
@@ -35,6 +40,8 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
     private var isSurfaceAvailable = false
     private var lastStreamWidth = 1920
     private var lastStreamHeight = 1080
+    private val telemetry = TelemetryTracker()
+    private var isHudDetailed = true
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -47,6 +54,14 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
         binding.btnConnect.setOnClickListener {
             startUsbSession()
+        }
+
+        binding.hudOverlay.setOnClickListener {
+            isHudDetailed = !isHudDetailed
+            binding.txtHudHeader.visibility = if (isHudDetailed) View.VISIBLE else View.GONE
+            binding.txtHudEncode.visibility = if (isHudDetailed) View.VISIBLE else View.GONE
+            binding.txtHudNetwork.visibility = if (isHudDetailed) View.VISIBLE else View.GONE
+            binding.txtHudDecode.visibility = if (isHudDetailed) View.VISIBLE else View.GONE
         }
     }
 
@@ -123,7 +138,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 if (ackHeader.msgType != MessageType.HELLO_ACK) {
                     throw IllegalStateException("Expected HELLO_ACK, got ${ackHeader.msgType}")
                 }
-                val ack = HelloAckMessage.readPayloadFrom(java.nio.ByteBuffer.wrap(ackPayload))
+                val ack = HelloAckMessage.readPayloadFrom(ByteBuffer.wrap(ackPayload))
                 lastStreamWidth = ack.streamWidth
                 lastStreamHeight = ack.streamHeight
 
@@ -132,9 +147,37 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                     binding.controlOverlay.visibility = View.GONE
                     binding.txtBanner.visibility = View.VISIBLE
                     binding.txtBanner.text = "Yayın Aktif: ${ack.streamWidth}x${ack.streamHeight}"
+                    binding.hudOverlay.visibility = View.VISIBLE
                 }
 
-                // 5. Stream receive loop
+                // 5. HUD update loop (every 300 ms)
+                val hudJob = launch(Dispatchers.Main) {
+                    while (isActive) {
+                        val s = telemetry.getSnapshot()
+                        binding.txtHudFpsBitrate.text = String.format(Locale.US, "FPS: %d | Bitrate: %.1f Mbps", s.fps, s.bitrateMbps)
+                        binding.txtHudEncode.text = String.format(Locale.US, "Encode: %.1f ms (Cap: %.1f ms)", s.encodeMs, s.captureMs)
+                        binding.txtHudNetwork.text = String.format(Locale.US, "Ağ (RTT/2): %.1f ms", s.networkRttDiv2Ms)
+                        binding.txtHudDecode.text = String.format(Locale.US, "Decode: %.1f ms", s.decodeMs)
+                        binding.txtHudTotal.text = String.format(Locale.US, "Tahmini Gecikme: %.1f ms", s.estimatedPipelineMs)
+                        delay(300)
+                    }
+                }
+
+                // 6. Ping loop (every 1000 ms)
+                val pingJob = launch(Dispatchers.IO) {
+                    var pingSeq = 100
+                    while (isActive && transport.isConnected) {
+                        delay(1000)
+                        val ping = telemetry.createPing()
+                        val pingPayload = ping.toByteArray()
+                        val pingHeader = FrameHeader.create(MessageType.PING, pingPayload.size.toLong(), sequence = pingSeq++)
+                        transport.sendPacket(pingHeader, pingPayload)
+                    }
+                }
+
+                var sequence = 1000
+
+                // 7. Stream receive loop
                 while (isActive && transport.isConnected) {
                     val (pktHeader, pktPayload) = transport.receivePacket()
                     when (pktHeader.msgType) {
@@ -144,7 +187,22 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                         }
                         MessageType.VIDEO_FRAME -> {
                             val frame = VideoFrameMessage.readPayloadFrom(pktPayload, pktHeader.flags)
+                            val t0 = System.nanoTime()
                             videoDecoder?.decodeFrame(frame.nalData, pktHeader.timestampUs, frame.isKeyframe)
+                            val decNs = System.nanoTime() - t0
+                            telemetry.onFrameDecoded(frame.captureDurationUs, frame.encodeDurationUs, decNs, pktPayload.size)
+                        }
+                        MessageType.PING -> {
+                            // Echo back PONG immediately
+                            val ping = PingMessage.readPayloadFrom(ByteBuffer.wrap(pktPayload))
+                            val pong = telemetry.createPong(ping)
+                            val pongPayload = pong.toByteArray()
+                            val pongHeader = FrameHeader.create(MessageType.PONG, pongPayload.size.toLong(), sequence = sequence++)
+                            transport.sendPacket(pongHeader, pongPayload)
+                        }
+                        MessageType.PONG -> {
+                            val pong = PongMessage.readPayloadFrom(ByteBuffer.wrap(pktPayload))
+                            telemetry.onPongReceived(pong)
                         }
                         MessageType.DISCONNECT -> {
                             break
@@ -154,12 +212,16 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                         }
                     }
                 }
+
+                hudJob.cancel()
+                pingJob.cancel()
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     binding.txtStatus.text = "Bağlantı koptu. Kabloyu ve USB hata ayıklamayı kontrol edin."
                     binding.txtStatus.setTextColor(getColor(android.R.color.holo_red_light))
                     binding.controlOverlay.visibility = View.VISIBLE
                     binding.txtBanner.visibility = View.GONE
+                    binding.hudOverlay.visibility = View.GONE
                 }
             } finally {
                 transport.close()
@@ -192,4 +254,3 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
         videoDecoder?.close()
     }
 }
-

@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
+using SecondScreen.Core.Diagnostics;
 using SecondScreen.Core.Protocol;
 using SecondScreen.Core.Transport;
 using SecondScreen.Media.Capture;
@@ -10,9 +12,28 @@ namespace SecondScreen.App;
 
 public static class Program
 {
+    [DllImport("winmm.dll", EntryPoint = "timeBeginPeriod")]
+    private static extern uint TimeBeginPeriod(uint uMilliseconds);
+
+    [DllImport("winmm.dll", EntryPoint = "timeEndPeriod")]
+    private static extern uint TimeEndPeriod(uint uMilliseconds);
+
     private static readonly CancellationTokenSource Cts = new();
 
     public static async Task Main(string[] args)
+    {
+        TimeBeginPeriod(1); // Set Windows timer precision to 1 ms
+        try
+        {
+            await RunAsync(args);
+        }
+        finally
+        {
+            TimeEndPeriod(1);
+        }
+    }
+
+    private static async Task RunAsync(string[] args)
     {
         Console.CancelKeyPress += (_, e) =>
         {
@@ -21,8 +42,36 @@ public static class Program
         };
 
         Console.WriteLine("=================================================");
-        Console.WriteLine(" SecondScreen Windows Host - Aşama 1 (USB-C Mode)");
+        Console.WriteLine(" SecondScreen Windows Host - Aşama 2 (Gecikme)");
         Console.WriteLine("=================================================");
+        Console.WriteLine();
+
+        bool autoOpenClock = args.Any(a => a.Equals("--test-clock", StringComparison.OrdinalIgnoreCase) || a.Equals("-t", StringComparison.OrdinalIgnoreCase));
+        if (autoOpenClock)
+        {
+            Console.WriteLine("[+] Gecikme test kronometresi açılıyor...");
+            LatencyStopwatchForm.ShowInThread();
+        }
+
+        // Background listener for 'T' key to open stopwatch
+        _ = Task.Run(() =>
+        {
+            while (!Cts.Token.IsCancellationRequested)
+            {
+                if (Console.KeyAvailable)
+                {
+                    var key = Console.ReadKey(intercept: true);
+                    if (key.Key == ConsoleKey.T)
+                    {
+                        Console.WriteLine("[+] Gecikme test kronometresi açılıyor...");
+                        LatencyStopwatchForm.ShowInThread();
+                    }
+                }
+                Thread.Sleep(100);
+            }
+        });
+
+        Console.WriteLine("[İPUCU] Uçtan uca gecikmeyi kamera ile ölçmek için 'T' tuşuna basın (Kronometre açılır).");
         Console.WriteLine();
 
         // 1. ADB Reverse
@@ -80,6 +129,7 @@ public static class Program
     {
         await using var transport = new TcpTransport(tcpClient);
         using var sessionCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var rttTracker = new RttTracker();
 
         // 1. Handshake: Wait for HELLO
         Console.WriteLine("[-] Tablet HELLO mesajı bekleniyor...");
@@ -112,7 +162,7 @@ public static class Program
             streamWidth = (ushort)(streamWidth & ~1);
             streamHeight = (ushort)(streamHeight & ~1);
             Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.WriteLine($"[!] DXGI yakalama başlatılamadı (kilitli masaüstü veya oturum kısıtı). Test deseni yayını: {streamWidth}x{streamHeight}");
+            Console.WriteLine($"[!] DXGI yakalama başlatılamadı. Test deseni yayını: {streamWidth}x{streamHeight}");
             Console.ResetColor();
         }
 
@@ -141,7 +191,9 @@ public static class Program
         encoder.Initialize(streamWidth, streamHeight, targetFps, (int)bitrateBps);
         Console.WriteLine("[+] Media Foundation H.264 Donanımsal/Düşük Gecikmeli Kodlayıcı hazır.");
 
-        // 4. Background task for incoming packets (e.g. KEYFRAME_REQ, DISCONNECT)
+        int sequence = 2;
+
+        // 5. Background task for incoming packets (KEYFRAME_REQ, PING, PONG, DISCONNECT)
         var receiveTask = Task.Run(async () =>
         {
             try
@@ -154,6 +206,30 @@ public static class Program
                         var req = KeyframeReqMessage.ReadPayloadFrom(inPayload);
                         Console.WriteLine($"[i] Tablet KEYFRAME_REQ istedi (Son iyi kare: {req.LastGoodFrameNumber})");
                         encoder.RequestKeyframe();
+                    }
+                    else if (inHeader.MsgType == MessageType.Ping)
+                    {
+                        // Reply with PONG immediately
+                        var ping = PingMessage.ReadPayloadFrom(inPayload);
+                        var pong = rttTracker.CreatePong(ping);
+                        byte[] pongPayload = new byte[PongMessage.PayloadSize];
+                        pong.WritePayloadTo(pongPayload);
+
+                        var pongHeader = FrameHeader.Create(
+                            MessageType.Pong,
+                            (uint)pongPayload.Length,
+                            sequence: (ushort)(Interlocked.Increment(ref sequence) & 0xFFFF),
+                            timestampUs: rttTracker.CurrentTimeUs);
+
+                        await transport.SendPacketAsync(pongHeader, pongPayload, sessionCts.Token);
+                    }
+                    else if (inHeader.MsgType == MessageType.Pong)
+                    {
+                        var pong = PongMessage.ReadPayloadFrom(inPayload);
+                        if (rttTracker.RecordPong(pong, rttTracker.CurrentTimeUs))
+                        {
+                            Console.WriteLine($"[RTT] Ağ gecikmesi: {rttTracker.LastRttMs:F1} ms (Tek yön RTT/2: {rttTracker.LastOneWayMs:F1} ms)");
+                        }
                     }
                     else if (inHeader.MsgType == MessageType.Disconnect)
                     {
@@ -169,8 +245,33 @@ public static class Program
             }
         }, sessionCts.Token);
 
-        // 5. Video Streaming Loop
-        ushort sequence = 2;
+        // 6. Periodic Ping Task (every 1000 ms)
+        var pingTask = Task.Run(async () =>
+        {
+            try
+            {
+                while (!sessionCts.Token.IsCancellationRequested)
+                {
+                    await Task.Delay(1000, sessionCts.Token);
+
+                    var ping = rttTracker.CreatePing();
+                    byte[] pingPayload = new byte[PingMessage.PayloadSize];
+                    ping.WritePayloadTo(pingPayload);
+
+                    var pingHeader = FrameHeader.Create(
+                        MessageType.Ping,
+                        (uint)pingPayload.Length,
+                        sequence: (ushort)(Interlocked.Increment(ref sequence) & 0xFFFF),
+                        timestampUs: ping.OriginTimeUs);
+
+                    await transport.SendPacketAsync(pingHeader, pingPayload, sessionCts.Token);
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception) { }
+        }, sessionCts.Token);
+
+        // 7. Video Streaming Loop
         uint frameNumber = 0;
         bool configSent = false;
         var stopwatch = Stopwatch.StartNew();
@@ -180,11 +281,13 @@ public static class Program
 
         try
         {
-            long targetFrameIntervalUs = 1_000_000 / targetFps;
+            long targetFrameIntervalTicks = Stopwatch.Frequency / targetFps;
 
             while (!sessionCts.Token.IsCancellationRequested)
             {
-                long frameStartUs = stopwatch.ElapsedTicks * 1_000_000 / Stopwatch.Frequency;
+                long frameStartTicks = stopwatch.ElapsedTicks;
+                long nextTargetTicks = frameStartTicks + targetFrameIntervalTicks;
+                long frameStartUs = (frameStartTicks * 1_000_000) / Stopwatch.Frequency;
 
                 // Acquire frame or generate test pattern
                 byte[] bgraData;
@@ -193,7 +296,7 @@ public static class Program
                 if (captureOk && capture.IsInitialized)
                 {
                     var capSw = Stopwatch.StartNew();
-                    using var capturedFrame = capture.AcquireNextFrame(timeoutMs: 16);
+                    var capturedFrame = capture.AcquireNextFrame(timeoutMs: 0);
                     capSw.Stop();
                     captureDurationUs = (ushort)Math.Min(capSw.Elapsed.TotalMicroseconds, ushort.MaxValue);
 
@@ -203,8 +306,8 @@ public static class Program
                     }
                     else
                     {
-                        // No new screen change this tick, wait briefly
-                        await Task.Delay(1, sessionCts.Token);
+                        // Wait for next tick
+                        Thread.Sleep(1);
                         continue;
                     }
                 }
@@ -230,7 +333,7 @@ public static class Program
                         var cfgHeader = FrameHeader.Create(
                             MessageType.VideoConfig,
                             (uint)encoded.SpsPpsConfig.Length,
-                            sequence: sequence++,
+                            sequence: (ushort)(Interlocked.Increment(ref sequence) & 0xFFFF),
                             timestampUs: (uint)frameStartUs);
                         await transport.SendPacketAsync(cfgHeader, encoded.SpsPpsConfig, sessionCts.Token);
                         configSent = true;
@@ -250,19 +353,27 @@ public static class Program
                     var frameHeader = FrameHeader.Create(
                         MessageType.VideoFrame,
                         (uint)framePayload.Length,
-                        sequence: sequence++,
+                        sequence: (ushort)(Interlocked.Increment(ref sequence) & 0xFFFF),
                         timestampUs: (uint)frameStartUs,
                         flags: frameMsg.GetFlags());
 
                     await transport.SendPacketAsync(frameHeader, framePayload, sessionCts.Token);
                 }
 
-                // Frame rate pacing (~16.6ms for 60 FPS)
-                long elapsedFrameUs = (stopwatch.ElapsedTicks * 1_000_000 / Stopwatch.Frequency) - frameStartUs;
-                long sleepUs = targetFrameIntervalUs - elapsedFrameUs;
-                if (sleepUs > 1000)
+                // High-precision frame rate pacing (solid 60.0 FPS)
+                long nowTicks = stopwatch.ElapsedTicks;
+                long diffTicks = nextTargetTicks - nowTicks;
+                if (diffTicks > 0)
                 {
-                    await Task.Delay((int)(sleepUs / 1000), sessionCts.Token);
+                    int sleepMs = (int)((diffTicks * 1000) / Stopwatch.Frequency);
+                    if (sleepMs > 2)
+                    {
+                        Thread.Sleep(sleepMs - 1);
+                    }
+                    while (stopwatch.ElapsedTicks < nextTargetTicks)
+                    {
+                        Thread.SpinWait(10);
+                    }
                 }
             }
         }
@@ -274,7 +385,7 @@ public static class Program
         finally
         {
             sessionCts.Cancel();
-            try { await receiveTask; } catch { }
+            try { await Task.WhenAll(receiveTask, pingTask); } catch { }
             Console.WriteLine($"[-] Tablet bağlantısı sonlandı. Toplam gönderilen kare: {frameNumber}");
         }
     }

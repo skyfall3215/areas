@@ -192,3 +192,45 @@ data class KeyframeReqMessage(val lastGoodFrameNumber: Long) {
     }
 }
 
+data class PingMessage(val pingId: Long, val originTimeUs: Long) {
+    companion object {
+        const val PAYLOAD_SIZE = 8
+
+        fun readPayloadFrom(buffer: ByteBuffer): PingMessage {
+            buffer.order(ByteOrder.BIG_ENDIAN)
+            val id = buffer.int.toLong() and 0xFFFFFFFFL
+            val time = buffer.int.toLong() and 0xFFFFFFFFL
+            return PingMessage(id, time)
+        }
+    }
+
+    fun toByteArray(): ByteArray {
+        val bytes = ByteArray(PAYLOAD_SIZE)
+        val buf = ByteBuffer.wrap(bytes).order(ByteOrder.BIG_ENDIAN)
+        buf.putInt((pingId and 0xFFFFFFFFL).toInt())
+        buf.putInt((originTimeUs and 0xFFFFFFFFL).toInt())
+        return bytes
+    }
+}
+
+data class PongMessage(val pingId: Long, val originTimeUs: Long) {
+    companion object {
+        const val PAYLOAD_SIZE = 8
+
+        fun readPayloadFrom(buffer: ByteBuffer): PongMessage {
+            buffer.order(ByteOrder.BIG_ENDIAN)
+            val id = buffer.int.toLong() and 0xFFFFFFFFL
+            val time = buffer.int.toLong() and 0xFFFFFFFFL
+            return PongMessage(id, time)
+        }
+    }
+
+    fun toByteArray(): ByteArray {
+        val bytes = ByteArray(PAYLOAD_SIZE)
+        val buf = ByteBuffer.wrap(bytes).order(ByteOrder.BIG_ENDIAN)
+        buf.putInt((pingId and 0xFFFFFFFFL).toInt())
+        buf.putInt((originTimeUs and 0xFFFFFFFFL).toInt())
+        return bytes
+    }
+}
+

@@ -5,18 +5,13 @@ using DxgiResultCode = Vortice.DXGI.ResultCode;
 
 namespace SecondScreen.Media.Capture;
 
-public sealed class CapturedFrame : IDisposable
+public sealed class CapturedFrame
 {
     public byte[]? RgbaData { get; init; }
     public int Width { get; init; }
     public int Height { get; init; }
     public long TimestampUs { get; init; }
-    public ID3D11Texture2D? GpuTexture { get; init; }
-
-    public void Dispose()
-    {
-        GpuTexture?.Dispose();
-    }
+    public bool IsNew { get; init; }
 }
 
 public sealed class DxgiScreenCapture : IDisposable
@@ -27,6 +22,9 @@ public sealed class DxgiScreenCapture : IDisposable
     private ID3D11Texture2D? _stagingTexture;
     private int _width;
     private int _height;
+    private byte[]? _reusableRgbaData;
+    private bool _hasValidFrame;
+    private long _lastPresentTimeUs;
     private bool _isDisposed;
 
     public int Width => _width;
@@ -37,6 +35,7 @@ public sealed class DxgiScreenCapture : IDisposable
     {
         Dispose();
         _isDisposed = false;
+        _hasValidFrame = false;
 
         using var factory = DXGI.CreateDXGIFactory1<IDXGIFactory1>();
         if (factory == null) return false;
@@ -47,7 +46,6 @@ public sealed class DxgiScreenCapture : IDisposable
             using (adapter)
             {
                 var desc = adapter.Description1;
-                // Skip basic render driver
                 if ((desc.Flags & AdapterFlags.Software) != 0) continue;
 
                 for (uint outIdx = 0; adapter.EnumOutputs(outIdx, out var output).Success; outIdx++)
@@ -73,10 +71,7 @@ public sealed class DxgiScreenCapture : IDisposable
                                 out ID3D11Device device,
                                 out ID3D11DeviceContext context);
 
-                            if (hr.Failure)
-                            {
-                                continue;
-                            }
+                            if (hr.Failure) continue;
 
                             _device = device;
                             _context = context;
@@ -99,6 +94,9 @@ public sealed class DxgiScreenCapture : IDisposable
                             _width = outDesc.DesktopCoordinates.Right - outDesc.DesktopCoordinates.Left;
                             _height = outDesc.DesktopCoordinates.Bottom - outDesc.DesktopCoordinates.Top;
 
+                            // Pre-allocate zero-GC reusable pixel buffer
+                            _reusableRgbaData = new byte[_width * _height * 4];
+
                             // Create staging texture for CPU readback
                             var textureDesc = new Texture2DDescription
                             {
@@ -119,7 +117,6 @@ public sealed class DxgiScreenCapture : IDisposable
                         }
                         catch
                         {
-                            // Try next adapter/output
                             Dispose();
                         }
                     }
@@ -130,9 +127,9 @@ public sealed class DxgiScreenCapture : IDisposable
         return false;
     }
 
-    public CapturedFrame? AcquireNextFrame(int timeoutMs = 100)
+    public CapturedFrame? AcquireNextFrame(int timeoutMs = 0)
     {
-        if (_duplication == null || _context == null || _stagingTexture == null)
+        if (_duplication == null || _context == null || _stagingTexture == null || _reusableRgbaData == null)
             return null;
 
         var result = _duplication.AcquireNextFrame(
@@ -142,17 +139,30 @@ public sealed class DxgiScreenCapture : IDisposable
 
         if (result == DxgiResultCode.WaitTimeout)
         {
+            // If screen didn't change this tick, reuse previous frame to keep 60 FPS constant
+            if (_hasValidFrame)
+            {
+                return new CapturedFrame
+                {
+                    RgbaData = _reusableRgbaData,
+                    Width = _width,
+                    Height = _height,
+                    TimestampUs = _lastPresentTimeUs,
+                    IsNew = false
+                };
+            }
             return null;
         }
 
         if (result.Failure || desktopResource == null)
         {
-            // If access was lost (e.g. desktop switch or UAC prompt), reinitialize
             if (result == DxgiResultCode.AccessLost || result == DxgiResultCode.AccessDenied)
             {
                 Initialize();
             }
-            return null;
+            return _hasValidFrame
+                ? new CapturedFrame { RgbaData = _reusableRgbaData, Width = _width, Height = _height, TimestampUs = _lastPresentTimeUs, IsNew = false }
+                : null;
         }
 
         using (desktopResource)
@@ -164,39 +174,49 @@ public sealed class DxgiScreenCapture : IDisposable
                 return null;
             }
 
-            // Copy to staging texture
             _context.CopyResource(_stagingTexture, desktopTexture);
             _duplication.ReleaseFrame();
 
-            // Map and copy bytes
             var mapped = _context.Map(_stagingTexture, 0, MapMode.Read, Vortice.Direct3D11.MapFlags.None);
             try
             {
                 int rowPitch = (int)mapped.RowPitch;
-                byte[] rgbaData = new byte[_width * _height * 4];
+                int rowBytes = _width * 4;
+                long totalBytes = (long)_width * _height * 4;
 
                 unsafe
                 {
                     byte* srcPtr = (byte*)mapped.DataPointer.ToPointer();
-                    fixed (byte* dstPtr = rgbaData)
+                    fixed (byte* dstPtr = _reusableRgbaData)
                     {
-                        for (int y = 0; y < _height; y++)
+                        if (rowPitch == rowBytes)
                         {
-                            Buffer.MemoryCopy(
-                                srcPtr + (y * rowPitch),
-                                dstPtr + (y * _width * 4),
-                                _width * 4,
-                                _width * 4);
+                            Buffer.MemoryCopy(srcPtr, dstPtr, totalBytes, totalBytes);
+                        }
+                        else
+                        {
+                            for (int y = 0; y < _height; y++)
+                            {
+                                Buffer.MemoryCopy(
+                                    srcPtr + (y * rowPitch),
+                                    dstPtr + (y * rowBytes),
+                                    rowBytes,
+                                    rowBytes);
+                            }
                         }
                     }
                 }
 
+                _hasValidFrame = true;
+                _lastPresentTimeUs = (long)(frameInfo.LastPresentTime / 10);
+
                 return new CapturedFrame
                 {
-                    RgbaData = rgbaData,
+                    RgbaData = _reusableRgbaData,
                     Width = _width,
                     Height = _height,
-                    TimestampUs = (long)(frameInfo.LastPresentTime / 10) // 100ns to microseconds
+                    TimestampUs = _lastPresentTimeUs,
+                    IsNew = true
                 };
             }
             finally
@@ -219,6 +239,7 @@ public sealed class DxgiScreenCapture : IDisposable
             _context = null;
             _device?.Dispose();
             _device = null;
+            _hasValidFrame = false;
         }
     }
 }

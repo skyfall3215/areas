@@ -10,6 +10,7 @@
         android:layout_height="match_parent"
         android:layout_gravity="center" />
 
+    <!-- Center Control Panel (Shown before connection or on disconnect) -->
     <LinearLayout
         android:id="@+id/controlOverlay"
         android:layout_width="wrap_content"
@@ -51,6 +52,7 @@
 
     </LinearLayout>
 
+    <!-- Top Banner -->
     <TextView
         android:id="@+id/txtBanner"
         android:layout_width="wrap_content"
@@ -67,5 +69,87 @@
         android:textSize="12sp"
         android:visibility="gone" />
 
-</FrameLayout>
+    <!-- Aşama 2: Semi-Transparent HUD Overlay (Top-Right) -->
+    <LinearLayout
+        android:id="@+id/hudOverlay"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|end"
+        android:layout_margin="12dp"
+        android:background="#B0101010"
+        android:elevation="6dp"
+        android:orientation="vertical"
+        android:paddingStart="12dp"
+        android:paddingTop="8dp"
+        android:paddingEnd="12dp"
+        android:paddingBottom="8dp"
+        android:visibility="gone">
 
+        <TextView
+            android:id="@+id/txtHudHeader"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:fontFamily="monospace"
+            android:text="HUD [Gecikme &amp; FPS]"
+            android:textColor="#AAAAAA"
+            android:textSize="10sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/txtHudFpsBitrate"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:fontFamily="monospace"
+            android:text="FPS: -- | Bitrate: -- Mbps"
+            android:textColor="#00E676"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/txtHudEncode"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:fontFamily="monospace"
+            android:text="Encode: -- ms (Cap: -- ms)"
+            android:textColor="#FFFFFF"
+            android:textSize="11sp" />
+
+        <TextView
+            android:id="@+id/txtHudNetwork"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:fontFamily="monospace"
+            android:text="Ağ (RTT/2): -- ms"
+            android:textColor="#29B6F6"
+            android:textSize="11sp" />
+
+        <TextView
+            android:id="@+id/txtHudDecode"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:fontFamily="monospace"
+            android:text="Decode: -- ms"
+            android:textColor="#FFCA28"
+            android:textSize="11sp" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginTop="4dp"
+            android:layout_marginBottom="4dp"
+            android:background="#44FFFFFF" />
+
+        <TextView
+            android:id="@+id/txtHudTotal"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:fontFamily="monospace"
+            android:text="Pipeline: -- ms"
+            android:textColor="#FF80AB"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+
+    </LinearLayout>
+
+</FrameLayout>

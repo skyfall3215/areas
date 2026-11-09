@@ -248,5 +248,41 @@ class ProtocolTest {
         assertTrue(parsedFrame.isKeyframe)
         assertArrayEquals(dummyNal, parsedFrame.nalData)
     }
+
+    @Test
+    fun pingMessage_and_pongMessage_roundTrip() {
+        val ping = PingMessage(pingId = 123L, originTimeUs = 987654321L)
+        val pingBytes = ping.toByteArray()
+        val parsedPing = PingMessage.readPayloadFrom(ByteBuffer.wrap(pingBytes))
+        assertEquals(ping.pingId, parsedPing.pingId)
+        assertEquals(ping.originTimeUs, parsedPing.originTimeUs)
+
+        val pong = PongMessage(pingId = 123L, originTimeUs = 987654321L)
+        val pongBytes = pong.toByteArray()
+        val parsedPong = PongMessage.readPayloadFrom(ByteBuffer.wrap(pongBytes))
+        assertEquals(pong.pingId, parsedPong.pingId)
+        assertEquals(pong.originTimeUs, parsedPong.originTimeUs)
+    }
+
+    @Test
+    fun telemetryTracker_snapshotCalculations() {
+        val tracker = com.secondscreen.client.telemetry.TelemetryTracker()
+        val ping = tracker.createPing()
+        val pong = tracker.createPong(ping)
+
+        tracker.onPongReceived(pong)
+        tracker.onFrameDecoded(
+            captureDurationUs = 1500,
+            encodeDurationUs = 3200,
+            decodeDurationNs = 4_500_000L,
+            payloadBytes = 25000
+        )
+
+        val snapshot = tracker.getSnapshot()
+        assertEquals(1.5, snapshot.captureMs, 0.01)
+        assertEquals(3.2, snapshot.encodeMs, 0.01)
+        assertEquals(4.5, snapshot.decodeMs, 0.01)
+        assertTrue(snapshot.estimatedPipelineMs > 9.0)
+    }
 }
 
