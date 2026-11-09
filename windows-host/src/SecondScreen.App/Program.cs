@@ -14,9 +14,15 @@ public static class Program
     [DllImport("user32.dll")]
     private static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
 
+    [DllImport("user32.dll")]
+    private static extern bool SetProcessDpiAwarenessContext(IntPtr value);
+
     [STAThread]
     public static void Main(string[] args)
     {
+        try { SecondScreen.Media.Capture.GdiScreenCapture.EnsureThreadDesktopAttached(); } catch { }
+        try { SetProcessDpiAwarenessContext((IntPtr)(-4)); } catch { } // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+
         using var mutex = new Mutex(true, AppMutexName, out bool createdNew);
         if (!createdNew)
         {
@@ -44,6 +50,7 @@ public static class Program
             }
             else
             {
+                Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
                 ApplicationConfiguration.Initialize();
                 Application.Run(new ServerDashboardForm());
             }

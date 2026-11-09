@@ -14,7 +14,15 @@ public sealed class ScreenCaptureEngine : IDisposable
 
     public bool Initialize(string? targetDeviceName, Rectangle targetBounds)
     {
-        // 1. Try DXGI hardware capture first
+        // 1. High-performance GDI capture first (bulletproof across hybrid GPUs, virtual screens, IddCx, and renders software cursor)
+        if (_gdi.Initialize(targetBounds, targetDeviceName))
+        {
+            _useGdi = true;
+            Console.WriteLine($"[ScreenCapture] Yüksek Hızlı GDI Yakalama devrede: {targetBounds.X},{targetBounds.Y} {targetBounds.Width}x{targetBounds.Height}");
+            return true;
+        }
+
+        // 2. DXGI hardware capture fallback
         if (!string.IsNullOrEmpty(targetDeviceName))
         {
             try
@@ -30,14 +38,6 @@ public sealed class ScreenCaptureEngine : IDisposable
             {
                 Console.WriteLine($"[ScreenCapture] DXGI denenirken istisna: {ex.Message}");
             }
-        }
-
-        // 2. High-performance GDI fallback (bulletproof across hybrid GPUs, virtual screens, IddCx)
-        if (_gdi.Initialize(targetBounds, targetDeviceName))
-        {
-            _useGdi = true;
-            Console.WriteLine($"[ScreenCapture] Yüksek Hızlı GDI Yakalama devrede: {targetBounds.X},{targetBounds.Y} {targetBounds.Width}x{targetBounds.Height}");
-            return true;
         }
 
         return false;

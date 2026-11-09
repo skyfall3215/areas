@@ -179,12 +179,8 @@ public sealed class SecondScreenServer : IDisposable
         var targetDisplay = DisplayEnumerator.GetTargetDisplay();
         Log($"[+] Hedef Monitör: {targetDisplay.DeviceName} ({targetDisplay.FriendlyName}) - {targetDisplay.Bounds.Width}x{targetDisplay.Bounds.Height}");
 
-        // 3. Initialize screen capture engine
-        using var capture = new ScreenCaptureEngine();
-        bool captureOk = capture.Initialize(targetDisplay.DeviceName, targetDisplay.Bounds);
-
-        ushort streamWidth = captureOk && capture.Width > 0 ? (ushort)(capture.Width & ~1) : (ushort)(hello.NativeWidth & ~1);
-        ushort streamHeight = captureOk && capture.Height > 0 ? (ushort)(capture.Height & ~1) : (ushort)(hello.NativeHeight & ~1);
+        ushort streamWidth = targetDisplay.Bounds.Width > 0 ? (ushort)(targetDisplay.Bounds.Width & ~1) : (ushort)(hello.NativeWidth & ~1);
+        ushort streamHeight = targetDisplay.Bounds.Height > 0 ? (ushort)(targetDisplay.Bounds.Height & ~1) : (ushort)(hello.NativeHeight & ~1);
         ushort targetFps = 60;
         uint bitrateBps = hello.PreferredBitrateKbps > 0 ? (uint)hello.PreferredBitrateKbps * 1000 : 20_000_000;
         uint sessionId = (uint)Random.Shared.Next(1, int.MaxValue);
@@ -205,12 +201,9 @@ public sealed class SecondScreenServer : IDisposable
         await transport.SendPacketAsync(ackHeader, ackPayload, sessionCts.Token);
         Log($"[+] Akış başlatıldı: {streamWidth}x{streamHeight} @ {targetFps} FPS, {bitrateBps / 1_000_000} Mbps");
 
-        // 5. Initialize encoder
-        using var encoder = new MfH264Encoder();
-        encoder.Initialize(streamWidth, streamHeight, targetFps, (int)bitrateBps);
-
         int sequence = 2;
         uint sentFrameCount = 0;
+        int requestKeyframeFlag = 0;
 
         using var touchInjector = new Win32TouchInjector();
         touchInjector.ScreenBounds = targetDisplay.Bounds;
@@ -223,12 +216,13 @@ public sealed class SecondScreenServer : IDisposable
         {
             try
             {
+                GdiScreenCapture.EnsureThreadDesktopAttached();
                 while (!sessionCts.Token.IsCancellationRequested)
                 {
                     var (inHeader, inPayload) = await transport.ReceivePacketAsync(sessionCts.Token);
                     if (inHeader.MsgType == MessageType.KeyframeReq)
                     {
-                        encoder.RequestKeyframe();
+                        Interlocked.Exchange(ref requestKeyframeFlag, 1);
                     }
                     else if (inHeader.MsgType == MessageType.Ping)
                     {
@@ -303,9 +297,9 @@ public sealed class SecondScreenServer : IDisposable
 
         // 8. Decoupled video sender
         var videoChannel = Channel.CreateBounded<(FrameHeader Header, byte[] Payload)>(
-            new BoundedChannelOptions(4)
+            new BoundedChannelOptions(16)
             {
-                FullMode = BoundedChannelFullMode.DropOldest,
+                FullMode = BoundedChannelFullMode.Wait,
                 SingleReader = true,
                 SingleWriter = true
             });
@@ -326,116 +320,152 @@ public sealed class SecondScreenServer : IDisposable
             catch { }
         }, sessionCts.Token);
 
-        // 9. Frame capture and streaming loop
-        long frameIntervalTicks = Stopwatch.Frequency / targetFps;
-        long nextTargetTicks = Stopwatch.GetTimestamp();
-        var stopwatch = Stopwatch.StartNew();
-        uint frameNumber = 0;
-        bool configSent = false;
-        byte[]? lastSpsPps = null;
-        byte[] testPatternBgra = new byte[streamWidth * streamHeight * 4];
+        // 9. Dedicated synchronous capture & encode thread (guarantees clean WinSta0\Default desktop attachment and 60.0 FPS pacing)
+        var captureCompletion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        uint finalFrameNumber = 0;
 
-        try
+        var captureThread = new Thread(() =>
         {
-            while (!sessionCts.Token.IsCancellationRequested)
+            uint frameNumber = 0;
+            try
             {
-                long frameStartUs = stopwatch.ElapsedTicks * 1_000_000 / Stopwatch.Frequency;
-                nextTargetTicks += frameIntervalTicks;
+                GdiScreenCapture.EnsureThreadDesktopAttached();
 
-                byte[] bgraData;
-                ushort captureDurationUs = 0;
+                using var capture = new ScreenCaptureEngine();
+                bool captureOk = capture.Initialize(targetDisplay.DeviceName, targetDisplay.Bounds);
 
-                if (captureOk)
+                using var encoder = new MfH264Encoder();
+                encoder.Initialize(streamWidth, streamHeight, targetFps, (int)bitrateBps);
+
+                long targetFrameIntervalTicks = Stopwatch.Frequency / targetFps;
+                var stopwatch = Stopwatch.StartNew();
+                bool configSent = false;
+                byte[] testPatternBgra = new byte[streamWidth * streamHeight * 4];
+
+                while (!sessionCts.Token.IsCancellationRequested)
                 {
-                    var capSw = Stopwatch.StartNew();
-                    var frame = capture.AcquireNextFrame(0);
-                    capSw.Stop();
-                    captureDurationUs = (ushort)Math.Min(capSw.Elapsed.TotalMicroseconds, ushort.MaxValue);
+                    long frameStartTicks = stopwatch.ElapsedTicks;
+                    long nextTargetTicks = frameStartTicks + targetFrameIntervalTicks;
+                    long frameStartUs = (frameStartTicks * 1_000_000) / Stopwatch.Frequency;
 
-                    if (frame != null)
+                    if (Interlocked.Exchange(ref requestKeyframeFlag, 0) == 1)
                     {
-                        bgraData = frame.RgbaData;
+                        encoder.RequestKeyframe();
+                    }
+
+                    byte[] bgraData;
+                    ushort captureDurationUs = 0;
+
+                    if (captureOk && capture.IsInitialized)
+                    {
+                        var capSw = Stopwatch.StartNew();
+                        var frame = capture.AcquireNextFrame(0);
+                        capSw.Stop();
+                        captureDurationUs = (ushort)Math.Min(capSw.Elapsed.TotalMicroseconds, ushort.MaxValue);
+
+                        if (frame != null)
+                        {
+                            bgraData = frame.RgbaData;
+                        }
+                        else
+                        {
+                            GenerateTestPattern(testPatternBgra, streamWidth, streamHeight, frameNumber);
+                            bgraData = testPatternBgra;
+                        }
                     }
                     else
                     {
                         GenerateTestPattern(testPatternBgra, streamWidth, streamHeight, frameNumber);
                         bgraData = testPatternBgra;
-                    }
-                }
-                else
-                {
-                    GenerateTestPattern(testPatternBgra, streamWidth, streamHeight, frameNumber);
-                    bgraData = testPatternBgra;
-                    captureDurationUs = 500;
-                }
-
-                // Encode
-                var encSw = Stopwatch.StartNew();
-                var encoded = encoder.EncodeBgraFrame(bgraData, frameStartUs);
-                encSw.Stop();
-                ushort encodeDurationUs = (ushort)Math.Min(encSw.Elapsed.TotalMicroseconds, ushort.MaxValue);
-
-                if (encoded != null)
-                {
-                    if (encoded.SpsPpsConfig != null && (!configSent || encoded.IsKeyframe))
-                    {
-                        var cfgHeader = FrameHeader.Create(
-                            MessageType.VideoConfig,
-                            (uint)encoded.SpsPpsConfig.Length,
-                            sequence: (ushort)(Interlocked.Increment(ref sequence) & 0xFFFF),
-                            timestampUs: (uint)frameStartUs);
-                        await transport.SendPacketAsync(cfgHeader, encoded.SpsPpsConfig, sessionCts.Token);
-                        configSent = true;
-                        lastSpsPps = encoded.SpsPpsConfig;
+                        captureDurationUs = 500;
                     }
 
-                    sentFrameCount = ++frameNumber;
-                    var frameMsg = new VideoFrameMessage(
-                        FrameNumber: frameNumber,
-                        CaptureDurationUs: captureDurationUs,
-                        EncodeDurationUs: encodeDurationUs,
-                        NalData: encoded.Data,
-                        IsKeyframe: encoded.IsKeyframe);
+                    // Encode
+                    var encSw = Stopwatch.StartNew();
+                    var encoded = encoder.EncodeBgraFrame(bgraData, frameStartUs);
+                    encSw.Stop();
+                    ushort encodeDurationUs = (ushort)Math.Min(encSw.Elapsed.TotalMicroseconds, ushort.MaxValue);
 
-                    byte[] framePayload = new byte[frameMsg.PayloadSize];
-                    frameMsg.WritePayloadTo(framePayload);
-
-                    var frameHeader = FrameHeader.Create(
-                        MessageType.VideoFrame,
-                        (uint)framePayload.Length,
-                        sequence: (ushort)(Interlocked.Increment(ref sequence) & 0xFFFF),
-                        timestampUs: (uint)frameStartUs,
-                        flags: frameMsg.GetFlags());
-
-                    if (videoChannel.Reader.Count >= 2)
+                    if (encoded != null)
                     {
-                        encoder.RequestKeyframe();
+                        if (encoded.SpsPpsConfig != null && (!configSent || encoded.IsKeyframe))
+                        {
+                            var cfgHeader = FrameHeader.Create(
+                                MessageType.VideoConfig,
+                                (uint)encoded.SpsPpsConfig.Length,
+                                sequence: (ushort)(Interlocked.Increment(ref sequence) & 0xFFFF),
+                                timestampUs: (uint)frameStartUs);
+                            videoChannel.Writer.TryWrite((cfgHeader, encoded.SpsPpsConfig));
+                            configSent = true;
+                        }
+
+                        if (videoChannel.Reader.Count < 6)
+                        {
+                            sentFrameCount = ++frameNumber;
+                            var frameMsg = new VideoFrameMessage(
+                                FrameNumber: frameNumber,
+                                CaptureDurationUs: captureDurationUs,
+                                EncodeDurationUs: encodeDurationUs,
+                                NalData: encoded.Data,
+                                IsKeyframe: encoded.IsKeyframe);
+
+                            byte[] framePayload = new byte[frameMsg.PayloadSize];
+                            frameMsg.WritePayloadTo(framePayload);
+
+                            var frameHeader = FrameHeader.Create(
+                                MessageType.VideoFrame,
+                                (uint)framePayload.Length,
+                                sequence: (ushort)(Interlocked.Increment(ref sequence) & 0xFFFF),
+                                timestampUs: (uint)frameStartUs,
+                                flags: frameMsg.GetFlags());
+
+                            videoChannel.Writer.TryWrite((frameHeader, framePayload));
+                        }
+                        else
+                        {
+                            encoder.RequestKeyframe();
+                        }
                     }
 
-                    videoChannel.Writer.TryWrite((frameHeader, framePayload));
-                }
-
-                // High-precision frame rate pacing (solid 60.0 FPS)
-                long nowTicks = stopwatch.ElapsedTicks;
-                long diffTicks = nextTargetTicks - nowTicks;
-                if (diffTicks > 0)
-                {
-                    int sleepMs = (int)((diffTicks * 1000) / Stopwatch.Frequency);
-                    if (sleepMs > 2)
+                    // High-precision frame rate pacing (solid 60.0 FPS)
+                    long nowTicks = stopwatch.ElapsedTicks;
+                    long diffTicks = nextTargetTicks - nowTicks;
+                    if (diffTicks > 0)
                     {
-                        Thread.Sleep(sleepMs - 1);
-                    }
-                    while (stopwatch.ElapsedTicks < nextTargetTicks)
-                    {
-                        Thread.SpinWait(10);
+                        int sleepMs = (int)((diffTicks * 1000) / Stopwatch.Frequency);
+                        if (sleepMs > 2)
+                        {
+                            Thread.Sleep(sleepMs - 1);
+                        }
+                        while (stopwatch.ElapsedTicks < nextTargetTicks)
+                        {
+                            Thread.SpinWait(10);
+                        }
                     }
                 }
             }
-        }
-        catch (OperationCanceledException) { }
-        catch (Exception ex)
+            catch (OperationCanceledException) { }
+            catch (Exception ex)
+            {
+                Log($"[!] Akış döngüsü kesildi: {ex.Message}");
+            }
+            finally
+            {
+                finalFrameNumber = frameNumber;
+                captureCompletion.TrySetResult();
+            }
+        })
         {
-            Log($"[!] Akış döngüsü kesildi: {ex.Message}");
+            IsBackground = true,
+            Name = "AreasCaptureEncodeThread",
+            Priority = ThreadPriority.AboveNormal
+        };
+
+        captureThread.Start();
+
+        try
+        {
+            await captureCompletion.Task;
         }
         finally
         {
@@ -443,7 +473,7 @@ public sealed class SecondScreenServer : IDisposable
             try { await senderTask; } catch { }
             sessionCts.Cancel();
             try { await Task.WhenAll(receiveTask, pingTask); } catch { }
-            Log($"[-] Tablet bağlantısı sonlandı. Toplam gönderilen kare: {frameNumber}");
+            Log($"[-] Tablet bağlantısı sonlandı. Toplam gönderilen kare: {finalFrameNumber}");
         }
     }
 

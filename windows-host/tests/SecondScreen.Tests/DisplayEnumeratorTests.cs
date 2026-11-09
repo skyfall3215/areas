@@ -64,43 +64,7 @@ public class DisplayEnumeratorTests
 
         using var icon = new Icon(icoPath, new Size(256, 256));
         using var bmp = icon.ToBitmap();
-
-        string assetsDir = @"D:\Areas\docs\assets";
-        Directory.CreateDirectory(assetsDir);
-        string logoPath = Path.Combine(assetsDir, "logo.png");
-        bmp.Save(logoPath, System.Drawing.Imaging.ImageFormat.Png);
-
-        // Generate Android mipmap icons
-        var sizes = new (string folder, int size)[]
-        {
-            ("mipmap-mdpi", 48),
-            ("mipmap-hdpi", 72),
-            ("mipmap-xhdpi", 96),
-            ("mipmap-xxhdpi", 144),
-            ("mipmap-xxxhdpi", 192),
-        };
-
-        string resDir = @"D:\Areas\android-client\app\src\main\res";
-        foreach (var (folder, sz) in sizes)
-        {
-            string dir = Path.Combine(resDir, folder);
-            Directory.CreateDirectory(dir);
-
-            using var resized = new Bitmap(sz, sz);
-            using (var g = Graphics.FromImage(resized))
-            {
-                g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
-                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
-                g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
-                g.DrawImage(bmp, 0, 0, sz, sz);
-            }
-
-            resized.Save(Path.Combine(dir, "ic_launcher.png"), System.Drawing.Imaging.ImageFormat.Png);
-            resized.Save(Path.Combine(dir, "ic_launcher_round.png"), System.Drawing.Imaging.ImageFormat.Png);
-        }
-
-        // Also copy ico to SecondScreen.App project
-        File.Copy(icoPath, @"D:\Areas\windows-host\src\SecondScreen.App\app.ico", true);
+        Assert.True(bmp.Width > 0 && bmp.Height > 0);
     }
 
     [Fact]

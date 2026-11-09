@@ -124,7 +124,7 @@ public sealed class GdiScreenCapture : IDisposable
         IntPtr hdcSrc, int nXSrc, int nYSrc, uint dwRop);
 
     private string? _deviceName;
-    private bool _isDeviceDc;
+    private bool _usedCreateDc;
     private IntPtr _hdcSrc;
     private IntPtr _hdcMem;
     private IntPtr _hBitmap;
@@ -137,7 +137,6 @@ public sealed class GdiScreenCapture : IDisposable
     private int _height;
     private byte[]? _buffer;
     private bool _isInitialized;
-    private bool _desktopAttached;
 
     public int Width => _width;
     public int Height => _height;
@@ -157,24 +156,14 @@ public sealed class GdiScreenCapture : IDisposable
 
         if (_width <= 0 || _height <= 0) return false;
 
-        // Try direct display device DC first (e.g. \\.\DISPLAY24), fallback to primary DISPLAY
-        _isDeviceDc = false;
-        if (!string.IsNullOrEmpty(_deviceName))
-        {
-            _hdcSrc = CreateDC(_deviceName, null, null, IntPtr.Zero);
-            _isDeviceDc = (_hdcSrc != IntPtr.Zero);
-        }
-
+        // Use the global virtual desktop DC so DWM composited surfaces across all monitors
+        // (including IddCx virtual displays at X=1920) are captured cleanly at (_x, _y).
+        _usedCreateDc = false;
+        _hdcSrc = GetDC(IntPtr.Zero);
         if (_hdcSrc == IntPtr.Zero)
         {
             _hdcSrc = CreateDC("DISPLAY", null, null, IntPtr.Zero);
-            _isDeviceDc = false;
-        }
-
-        if (_hdcSrc == IntPtr.Zero)
-        {
-            _hdcSrc = GetDC(IntPtr.Zero);
-            _isDeviceDc = false;
+            _usedCreateDc = (_hdcSrc != IntPtr.Zero);
         }
 
         if (_hdcSrc == IntPtr.Zero) return false;
@@ -210,9 +199,8 @@ public sealed class GdiScreenCapture : IDisposable
         return true;
     }
 
-    private void EnsureThreadDesktopAttached()
+    public static void EnsureThreadDesktopAttached()
     {
-        if (_desktopAttached) return;
         try
         {
             IntPtr hDesktop = OpenInputDesktop(0, false, DESKTOP_ALL);
@@ -220,7 +208,6 @@ public sealed class GdiScreenCapture : IDisposable
             {
                 SetThreadDesktop(hDesktop);
                 CloseDesktop(hDesktop);
-                _desktopAttached = true;
             }
         }
         catch
@@ -233,14 +220,10 @@ public sealed class GdiScreenCapture : IDisposable
     {
         if (!_isInitialized || _buffer == null || _pBits == IntPtr.Zero || _hdcSrc == IntPtr.Zero) return null;
 
-        // If using device-specific DC (e.g. \\.\DISPLAY24), source coordinates start at (0, 0)
-        int srcX = _isDeviceDc ? 0 : _x;
-        int srcY = _isDeviceDc ? 0 : _y;
-
-        bool success = BitBlt(_hdcMem, 0, 0, _width, _height, _hdcSrc, srcX, srcY, SRCCOPY);
+        bool success = BitBlt(_hdcMem, 0, 0, _width, _height, _hdcSrc, _x, _y, SRCCOPY);
         if (!success)
         {
-            // Re-acquire desktop DC if device DC was invalidated
+            EnsureThreadDesktopAttached();
             IntPtr hdcScreen = GetDC(IntPtr.Zero);
             if (hdcScreen != IntPtr.Zero)
             {
@@ -378,7 +361,10 @@ public sealed class GdiScreenCapture : IDisposable
 
         if (_hdcSrc != IntPtr.Zero)
         {
-            DeleteDC(_hdcSrc);
+            if (_usedCreateDc)
+                DeleteDC(_hdcSrc);
+            else
+                ReleaseDC(IntPtr.Zero, _hdcSrc);
             _hdcSrc = IntPtr.Zero;
         }
 
