@@ -7,11 +7,25 @@ public sealed class GdiScreenCapture : IDisposable
 {
     private const int DIB_RGB_COLORS = 0;
     private const uint SRCCOPY = 0x00CC0020;
+    private const uint SRCAND = 0x008800C6;
+    private const uint SRCINVERT = 0x00660046;
     private const uint CAPTUREBLT = 0x40000000;
     private const int CURSOR_SHOWING = 0x00000001;
     private const uint DI_NORMAL = 0x0003;
     private const int IDC_ARROW = 32512;
     private const uint DESKTOP_ALL = 0x01FF;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct BITMAP
+    {
+        public int bmType;
+        public int bmWidth;
+        public int bmHeight;
+        public int bmWidthBytes;
+        public ushort bmPlanes;
+        public ushort bmBitsPixel;
+        public IntPtr bmBits;
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     private struct BITMAPINFOHEADER
@@ -108,6 +122,9 @@ public sealed class GdiScreenCapture : IDisposable
 
     [DllImport("gdi32.dll")]
     private static extern bool DeleteObject(IntPtr hObject);
+
+    [DllImport("gdi32.dll")]
+    private static extern int GetObject(IntPtr hgdiobj, int cbBuffer, out BITMAP lpvObject);
 
     [DllImport("gdi32.dll")]
     private static extern IntPtr CreateDIBSection(
@@ -234,11 +251,14 @@ public sealed class GdiScreenCapture : IDisposable
 
         if (!success) return null;
 
+        // Draw the genuine native Windows cursor (arrow, hand, I-beam, resize, etc.) onto _hdcMem before copying pixels
+        bool nativeCursorDrawn = DrawNativeCursorOnDc();
+
         int totalBytes = _width * _height * 4;
         Marshal.Copy(_pBits, _buffer, 0, totalBytes);
 
-        // Always overlay crisp High-DPI mouse cursor directly onto the output frame buffer
-        if (GetCursorPos(out var pt))
+        // Fallback to software cursor only if native DrawIconEx did not draw
+        if (!nativeCursorDrawn && GetCursorPos(out var pt))
         {
             DrawSoftwareCursor(_buffer, pt.x, pt.y);
         }
@@ -251,6 +271,89 @@ public sealed class GdiScreenCapture : IDisposable
             TimestampUs = DateTime.UtcNow.Ticks / 10,
             IsNew = true
         };
+    }
+
+    private bool DrawNativeCursorOnDc()
+    {
+        var ci = new CURSORINFO();
+        ci.cbSize = Marshal.SizeOf<CURSORINFO>();
+
+        IntPtr hCursor = IntPtr.Zero;
+        int curX = 0;
+        int curY = 0;
+
+        if (GetCursorInfo(out ci) && (ci.flags & CURSOR_SHOWING) != 0 && ci.hCursor != IntPtr.Zero)
+        {
+            hCursor = ci.hCursor;
+            curX = ci.ptScreenPos.x;
+            curY = ci.ptScreenPos.y;
+        }
+        else if (GetCursorPos(out var pt))
+        {
+            hCursor = _hDefaultCursor;
+            curX = pt.x;
+            curY = pt.y;
+        }
+
+        if (hCursor == IntPtr.Zero) return false;
+
+        int relX = curX - _x;
+        int relY = curY - _y;
+        if (relX < -64 || relX >= _width + 64 || relY < -64 || relY >= _height + 64)
+            return true; // Cursor is on another monitor, no fallback needed
+
+        int hotspotX = 0;
+        int hotspotY = 0;
+        bool isMonochromeXor = false;
+        IntPtr hbmMask = IntPtr.Zero;
+        IntPtr hbmColor = IntPtr.Zero;
+
+        if (GetIconInfo(hCursor, out var ii))
+        {
+            hotspotX = ii.xHotspot;
+            hotspotY = ii.yHotspot;
+            hbmMask = ii.hbmMask;
+            hbmColor = ii.hbmColor;
+            isMonochromeXor = (hbmColor == IntPtr.Zero && hbmMask != IntPtr.Zero);
+        }
+
+        int drawX = relX - hotspotX;
+        int drawY = relY - hotspotY;
+        bool drawn = false;
+
+        if (isMonochromeXor && GetObject(hbmMask, Marshal.SizeOf<BITMAP>(), out var bmp) > 0 && bmp.bmHeight >= 2)
+        {
+            int curW = bmp.bmWidth;
+            int curH = bmp.bmHeight / 2;
+            IntPtr hdcMask = CreateCompatibleDC(_hdcMem);
+            if (hdcMask != IntPtr.Zero)
+            {
+                IntPtr oldMask = SelectObject(hdcMask, hbmMask);
+                BitBlt(_hdcMem, drawX, drawY, curW, curH, hdcMask, 0, 0, SRCAND);
+                drawn = BitBlt(_hdcMem, drawX, drawY, curW, curH, hdcMask, 0, curH, SRCINVERT);
+                SelectObject(hdcMask, oldMask);
+                DeleteDC(hdcMask);
+            }
+        }
+
+        if (!drawn)
+        {
+            drawn = DrawIconEx(
+                _hdcMem,
+                drawX,
+                drawY,
+                hCursor,
+                0,
+                0,
+                0,
+                IntPtr.Zero,
+                DI_NORMAL);
+        }
+
+        if (hbmMask != IntPtr.Zero) DeleteObject(hbmMask);
+        if (hbmColor != IntPtr.Zero) DeleteObject(hbmColor);
+
+        return drawn;
     }
 
     private static readonly string[] CursorArrowPattern = new[]
