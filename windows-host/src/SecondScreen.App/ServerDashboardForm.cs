@@ -41,8 +41,8 @@ public sealed class ServerDashboardForm : Form
     private void InitializeCustomForm()
     {
         Text = "Areas — SecondScreen Server";
-        Size = new Size(860, 680);
-        MinimumSize = new Size(800, 600);
+        Size = new Size(920, 740);
+        MinimumSize = new Size(880, 680);
         StartPosition = FormStartPosition.CenterScreen;
         BackColor = Color.FromArgb(20, 20, 26);
         ForeColor = Color.FromArgb(240, 240, 245);
@@ -69,8 +69,8 @@ public sealed class ServerDashboardForm : Form
         };
         pnlMain.RowStyles.Add(new RowStyle(SizeType.Absolute, 70));  // Header
         pnlMain.RowStyles.Add(new RowStyle(SizeType.Absolute, 50));  // Controls Bar
-        pnlMain.RowStyles.Add(new RowStyle(SizeType.Absolute, 160)); // Connectivity & Displays
-        pnlMain.RowStyles.Add(new RowStyle(SizeType.Absolute, 110)); // Live Session Telemetry
+        pnlMain.RowStyles.Add(new RowStyle(SizeType.Absolute, 210)); // Connectivity & Displays (Expanded to prevent clipping)
+        pnlMain.RowStyles.Add(new RowStyle(SizeType.Absolute, 95));  // Live Session Telemetry
         pnlMain.RowStyles.Add(new RowStyle(SizeType.Percent, 100));  // Logs
 
         // 1. Header (Logo, Titles, Status Badge)
@@ -112,13 +112,13 @@ public sealed class ServerDashboardForm : Form
         _lblStatusBadge = new Label
         {
             Text = "● Dinliyor (Port 27183)",
-            Font = new Font("Segoe UI", 10f, FontStyle.Bold),
+            Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
             ForeColor = Color.FromArgb(34, 197, 94),
             BackColor = Color.FromArgb(30, 41, 59),
             TextAlign = ContentAlignment.MiddleCenter,
             Size = new Size(220, 36),
-            Location = new Point(590, 16),
-            Anchor = AnchorStyles.Top | AnchorStyles.Right
+            Dock = DockStyle.Right,
+            Margin = new Padding(0, 12, 0, 12)
         };
         pnlHeader.Controls.Add(_lblStatusBadge);
         pnlMain.Controls.Add(pnlHeader, 0, 0);
@@ -186,7 +186,7 @@ public sealed class ServerDashboardForm : Form
 
         // Left Card: Connectivity
         var pnlConnCard = CreateCardPanel("🌐 Bağlantı Kanalları");
-        _lblUsbStatus = CreateInfoLabel("• USB-C (Kablo): Kontrol ediliyor...");
+        _lblUsbStatus = CreateInfoLabel("• USB-C Kablo (adb reverse): Kontrol ediliyor...");
         _lblWifiIp = CreateInfoLabel("• Wi-Fi LAN IP: 192.168.1.212:27183");
         _lblHotspotStatus = CreateInfoLabel("• Mobil Etkin Nokta (Hotspot): 192.168.137.1");
 
@@ -197,7 +197,12 @@ public sealed class ServerDashboardForm : Form
         pnlConnCard.Controls.Add(_lblWifiIp);
         pnlConnCard.Controls.Add(_lblHotspotStatus);
 
-        var pnlConnButtons = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true, Margin = new Padding(0, 4, 0, 0) };
+        var pnlConnButtons = new FlowLayoutPanel
+        {
+            FlowDirection = FlowDirection.LeftToRight,
+            AutoSize = true,
+            Margin = new Padding(0, 8, 0, 0)
+        };
         pnlConnButtons.Controls.Add(btnRefreshUsb);
         pnlConnButtons.Controls.Add(btnHotspotSettings);
         pnlConnCard.Controls.Add(pnlConnButtons);
@@ -207,6 +212,7 @@ public sealed class ServerDashboardForm : Form
         // Right Card: Display & Driver
         var pnlDispCard = CreateCardPanel("🖥️ Sanal Ekran Sürücüsü (IddCx)");
         _lblVirtualDisplayStatus = CreateInfoLabel("• Sanal Ekran: Kontrol ediliyor...");
+        _lblVirtualDisplayStatus.MaximumSize = new Size(380, 0); // Allow clean multi-line wrapping without overlapping buttons
         
         _btnInstallDriver = CreateSmallButton("Sürücüyü Kur (IddCx)", async (_, _) =>
         {
@@ -237,7 +243,14 @@ public sealed class ServerDashboardForm : Form
 
         pnlDispCard.Controls.Add(_lblVirtualDisplayStatus);
 
-        var pnlDispButtons = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true, Margin = new Padding(0, 4, 0, 0) };
+        var pnlDispButtons = new FlowLayoutPanel
+        {
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = true,
+            AutoSize = true,
+            MaximumSize = new Size(400, 0),
+            Margin = new Padding(0, 8, 0, 0)
+        };
         pnlDispButtons.Controls.Add(_btnInstallDriver);
         pnlDispButtons.Controls.Add(_btnUninstallDriver);
         pnlDispButtons.Controls.Add(btnSingleScreen);
@@ -486,3 +499,4 @@ public sealed class ServerDashboardForm : Form
         return btn;
     }
 }
+

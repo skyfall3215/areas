@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
@@ -5,9 +6,32 @@ namespace SecondScreen.App;
 
 public static class Program
 {
+    private const string AppMutexName = "Global\\AreasSecondScreenServerMutex";
+
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
+
     [STAThread]
     public static void Main(string[] args)
     {
+        using var mutex = new Mutex(true, AppMutexName, out bool createdNew);
+        if (!createdNew)
+        {
+            // Another instance is already running! Bring it to front and exit cleanly
+            var current = Process.GetCurrentProcess();
+            var existing = Process.GetProcessesByName(current.ProcessName)
+                                  .FirstOrDefault(p => p.Id != current.Id);
+            if (existing != null && existing.MainWindowHandle != IntPtr.Zero)
+            {
+                ShowWindowAsync(existing.MainWindowHandle, 9); // SW_RESTORE
+                SetForegroundWindow(existing.MainWindowHandle);
+            }
+            return;
+        }
+
         try
         {
             bool isConsole = args.Any(a => a.Equals("--console", StringComparison.OrdinalIgnoreCase) ||

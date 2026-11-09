@@ -78,6 +78,7 @@ public sealed class SecondScreenServer : IDisposable
         try
         {
             _listener = new TcpListener(IPAddress.Any, Port);
+            _listener.Server.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
             _listener.Start();
             Log($"[+] TCP Dinleyici 0.0.0.0:{Port} üzerinde hazır (USB + Wi-Fi + Hotspot).");
             OnStatusChanged?.Invoke("Dinliyor (Bağlantı Bekleniyor)");
