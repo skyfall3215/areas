@@ -9,7 +9,7 @@
     <a href="https://dotnet.microsoft.com/"><img src="https://img.shields.io/badge/.NET-8.0-512BD4?logo=dotnet&logoColor=white" alt=".NET 8"/></a>
     <a href="https://kotlinlang.org/"><img src="https://img.shields.io/badge/Kotlin-2.0-7F52FF?logo=kotlin&logoColor=white" alt="Kotlin"/></a>
     <a href="https://developer.android.com/"><img src="https://img.shields.io/badge/Android-10%2B-3DDC84?logo=android&logoColor=white" alt="Android 10+"/></a>
-    <a href="https://github.com/skyfall3215/areas/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License MIT"/></a>
+    <a href="https://github.com/skyfall3215/areas/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-blue.svg" alt="License GPLv3"/></a>
     <img src="https://img.shields.io/badge/Latency-%3C%2025ms-success" alt="Low Latency"/>
     <img src="https://img.shields.io/badge/Stream-60%20FPS%20%7C%202.3K-orange" alt="Stream Spec"/>
   </p>
@@ -223,4 +223,4 @@ dotnet test windows-host/WindowsHost.sln
 
 ## 📄 License
 
-This project is licensed under the [MIT License](LICENSE). Feel free to use, modify, and distribute it freely.
+This project is licensed under the [GNU General Public License v3.0 (GPLv3)](LICENSE). Feel free to use, modify, and distribute it under the terms of copyleft freedom.
