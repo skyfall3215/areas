@@ -3,7 +3,7 @@
   <img src="docs/assets/logo.png" alt="Areas Logo" width="160" onerror="this.style.display='none'"/>
   <h1 align="center">Areas — SecondScreen</h1>
   <p align="center">
-    <strong>Windows dizüstü ve masaüstü bilgisayarlar için ultra düşük gecikmeli (< 25 ms) Android ikinci ekran çözümü.</strong>
+    <strong>Ultra-low-latency (< 25 ms), high-performance second monitor solution for Windows using Android tablets.</strong>
   </p>
   <p align="center">
     <a href="https://dotnet.microsoft.com/"><img src="https://img.shields.io/badge/.NET-8.0-512BD4?logo=dotnet&logoColor=white" alt=".NET 8"/></a>
@@ -17,50 +17,51 @@
 
 ---
 
-## 📌 Proje Hakkında
+## 📌 Overview
 
-**Areas (SecondScreen)**, bir Samsung Galaxy Tab (veya herhangi bir modern Android tablet) cihazını Windows bilgisayarınız için **tam bağımsız, genişletilmiş (Extended) ikinci bir monitör** haline getiren açık kaynaklı, yüksek performanslı ve donanım hızlandırmalı bir ekran paylaşım ve uzaktan girdi sistemidir.
+**Areas (SecondScreen)** is an open-source, ultra-low-latency, hardware-accelerated remote display and input solution that transforms your Samsung Galaxy Tab (or any modern Android tablet) into a **true, independent extended monitor** for your Windows PC or laptop.
 
-Yalnızca ekranı klonlamakla kalmaz; Windows IddCx sanal monitör sürücüsü entegrasyonu sayesinde tabletin yerel çözünürlüğünde (`2304x1440` vb.) ayrı bir masaüstü alanı açar. Windows çoklu dokunma hareketlerini, fare emülasyonunu ve sanal klavyeyi düşük gecikmeli bir ikili (binary) protokol üzerinden taşır.
-
----
-
-## ✨ Temel Özellikler
-
-- ⚡ **Ultra Düşük Gecikme (15–25 ms):**
-  - **Host (PC):** Windows Media Foundation (MFT) donanımsal H.264 CBR kodlayıcı, sıfır B-frame gecikmesi, `TCP_NODELAY`.
-  - **Client (Tablet):** Android donanımsal `MediaCodec` NAL parser ve doğrudan `SurfaceView` render mimarisi.
-- 🖥️ **Gerçek İkinci Ekran (Virtual Display & Extend):**
-  - Windows IddCx sanal ekran sürücüsü ile bağımsız 2. ekran (`DISPLAY2`).
-  - Tabletin doğal ekran en-boy oranına (`2304x1440 @ 60/90Hz`) özel çözünürlük desteği.
-  - Bağlantı anında otomatik `ExtendDesktop` masaüstü genişletme.
-- 🖱️ **Yüksek Çözünürlüklü Fare İmleci (High-DPI Cursor Overlay):**
-  - Fare 2. ekrana geçtiğinde donanımsal video akışı üzerine doğrudan 1.5x High-DPI Windows ok imleci bindirilir (Moonlight / Parsec tarzı doğrudan piksel işleme).
-- 🖐️ **Windows Benzeri Dokunmatik Hareketler ve Fare Emülasyonu:**
-  - **Tek Dokunuş:** Sol tıklama.
-  - **Uzun Basma:** Sağ tıklama (bağlam menüsü).
-  - **Sürükleme:** Pencereleri taşıma, seçim yapma ve fare hareketi.
-  - **İki Parmakla Dokunma:** Hızlı sağ tık.
-  - **İki Parmakla Kaydırma:** Dikey ve yatay pürüzsüz fare tekerleği (Mouse Wheel).
-  - **Kıstırma (Pinch-to-Zoom):** `Ctrl + Mouse Wheel` ile yakınlaştırma / uzaklaştırma.
-- ⌨️ **Moonlight Tarzı Sanal Klavye:**
-  - Ekranın sağ alt köşesinde açılır/kapanır klavye butonu.
-  - Windows metin alanlarına odaklanıldığında doğrudan tablet üzerinden Türkçe/İngilizce yazma, fonksiyon ve modifiye tuşları (Ctrl, Alt, Shift, Backspace, Enter, Esc).
-- 🌐 **Her Ortama Uygun 3 Taşıma Modu:**
-  1. **USB-C Kablo (`adb reverse`):** Sıfır paket kaybı, maksimum bant genişliği, Wi-Fi parazitlerinden arındırılmış en kararlı mod.
-  2. **Wi-Fi LAN & Otomatik Keşif:** UDP Keşif yayını (`27184`) ile tek tıkla otomatik bağlanma.
-  3. **Windows Mobil Etkin Nokta (Hotspot):** İstemci izolasyonu (Client Isolation) bulunan yurt, otel ve okul ağlarında tek tıkla doğrudan bağlantı.
-- 📊 **Canlı Telemetri HUD Paneli:**
-  - Anlık FPS, Bitrate, Kodlama süresi, Ağ RTT/2 gecikmesi, Çözme süresi ve Tahmini Toplam Gecikme ekranı.
+Unlike simple screen mirroring apps, Areas integrates Windows Indirect Display Driver (IddCx) technology to create a dedicated secondary monitor at your tablet's native resolution (`2304x1440` @ 60/90Hz). It streams desktop frames with sub-frame encoding latency while seamlessly bridging multi-touch gestures, mouse emulation, and virtual keyboard input back to Windows over a custom binary protocol.
 
 ---
 
-## 🏗️ Sistem Mimarisi
+## ✨ Key Features
+
+- ⚡ **Ultra-Low Latency (15–25 ms End-to-End):**
+  - **Host (PC):** Windows Media Foundation (MFT) hardware H.264 CBR encoder, 0 B-frames, sub-millisecond GDI/DIB capture, `TCP_NODELAY`.
+  - **Client (Tablet):** Hardware-accelerated Android `MediaCodec` NAL parser with zero-copy direct rendering to `SurfaceView`.
+- 🖥️ **True Second Display (Virtual Display & Extend Desktop):**
+  - Native virtual monitor powered by Windows IddCx (`DISPLAY2`).
+  - Supports native tablet resolutions and aspect ratios (e.g., `2304x1440` 16:10).
+  - Automatically invokes Windows `ExtendDesktop` topology upon client connection.
+- 🖱️ **High-DPI Software Cursor Overlay:**
+  - Real-time mouse pointer rendering directly onto the video buffer with sub-millisecond precision.
+  - Automatically scales (1.5x / High-DPI) with crisp black-and-white borders for flawless visibility on high-resolution displays.
+- 🖐️ **Windows-Like Touch Gestures & Mouse Emulation:**
+  - **Tap:** Left mouse click.
+  - **Long Press:** Right click (context menu).
+  - **Drag / Pan:** Window dragging, text selection, and mouse movement.
+  - **Two-Finger Tap:** Quick right click.
+  - **Two-Finger Scroll:** Smooth vertical and horizontal mouse wheel scrolling.
+  - **Pinch-to-Zoom:** Emulates `Ctrl + Mouse Wheel` for zooming in browsers and documents.
+- ⌨️ **Moonlight-Style Virtual Keyboard:**
+  - On-screen floating toggle button at the bottom right corner.
+  - Type into any Windows text field from the tablet with full modifier support (Ctrl, Alt, Shift, Backspace, Enter, Esc, Navigation keys).
+- 🌐 **Zero-Config Multi-Transport Modes:**
+  1. **USB-C (ADB Reverse):** Maximum bandwidth, zero packet loss, completely immune to Wi-Fi interference.
+  2. **Wi-Fi LAN & Auto-Discovery:** Instant one-click connection via UDP broadcast discovery (`port 27184`).
+  3. **Windows Mobile Hotspot:** Dedicated 1-click fallback mode for university dorms, hotels, and enterprise networks with Wi-Fi Client Isolation.
+- 📊 **Real-Time Telemetry HUD:**
+  - Live on-screen performance stats: FPS, Bitrate, Encode time, Network RTT, Decode time, and Total Estimated Latency.
+
+---
+
+## 🏗️ Architecture
 
 ```mermaid
 flowchart LR
     subgraph PC ["Windows Host (.NET 8)"]
-        VDD["Sanal Monitör (IddCx)\n2304x1440 @ 60Hz"]
+        VDD["Virtual Display Driver (IddCx)\n2304x1440 @ 60Hz"]
         CAP["GDI/DXGI Capture Engine\n(BitBlt + Cursor Overlay)"]
         ENC["Media Foundation\nH.264 Hardware MFT"]
         NET_TX["Async TCP Streamer\n(TCP_NODELAY)"]
@@ -84,142 +85,142 @@ flowchart LR
         SURF --> TOUCH_MGR --> NET_TX_C
     end
 
-    NET_TX ==>|H.264 Video Paketi| NET_RX
-    NET_TX_C ==>|Dokunma / Klavye / Ping| INP_RX
+    NET_TX ==>|H.264 Video Stream| NET_RX
+    NET_TX_C ==>|Touch / Keyboard / Ping| INP_RX
 ```
 
 ---
 
-## 📂 Proje Yapısı
+## 📂 Repository Structure
 
 ```text
 Areas/
-├── android-client/                  # Android İstemci Uygulaması (Kotlin / Jetpack Compose)
+├── android-client/                  # Android Client App (Kotlin / Jetpack Compose)
 │   ├── app/src/main/java/com/secondscreen/client/
-│   │   ├── connection/              # TCP İstemcisi, Ağ yöneticisi, Bağlantı durumu
-│   │   ├── discovery/               # UDP Otomatik Keşif Dinleyicisi
-│   │   ├── input/                   # TouchGestureManager, Sanal Klavye ve Girdi Haritalama
-│   │   ├── protocol/                # İkili (Binary) Paket Serileştirme & Çözümleme
-│   │   ├── telemetry/               # Canlı Gecikme Ölçümü ve HUD Takipçisi
-│   │   ├── ui/                      # Jetpack Compose Arayüzü, Video SurfaceView
-│   │   └── video/                   # MediaCodec Donanımsal H.264 Video Oynatıcı
+│   │   ├── connection/              # TCP client, network manager, state machine
+│   │   ├── discovery/               # UDP auto-discovery listener
+│   │   ├── input/                   # TouchGestureManager, virtual keyboard & input mapping
+│   │   ├── protocol/                # Binary packet serialization & parsing
+│   │   ├── telemetry/               # Live latency tracker & HUD state
+│   │   ├── ui/                      # Jetpack Compose UI, video SurfaceView
+│   │   └── video/                   # MediaCodec hardware H.264 video player
 │   └── build.gradle.kts
 │
-├── windows-host/                    # Windows Sunucu Uygulaması (.NET 8 / C#)
+├── windows-host/                    # Windows Host Application (.NET 8 / C#)
 │   ├── src/
-│   │   ├── SecondScreen.App/        # Host Konsol / UI Başlatıcısı ve Orkestratör
-│   │   ├── SecondScreen.Core/       # Ortak Tipler ve Yapılandırma
-│   │   ├── SecondScreen.Display/    # Windows Çoklu Monitör ve Topology Yönetimi (Extend/Internal)
-│   │   ├── SecondScreen.Input/      # Win32 Çoklu Dokunma ve Fare Enjeksiyonu
-│   │   ├── SecondScreen.Media/      # GDI/DXGI Ekran Yakalama, Cursor Çizimi, MFT H.264 Kodlayıcı
-│   │   └── SecondScreen.Network/    # TCP Sunucu, UDP Keşif Yayını, Hotspot Algılama
-│   ├── tests/SecondScreen.Tests/    # XUnit Birim ve Entegrasyon Testleri (37 test)
+│   │   ├── SecondScreen.App/        # Host entry point, orchestrator & CLI
+│   │   ├── SecondScreen.Core/       # Shared models, constants & configuration
+│   │   ├── SecondScreen.Display/    # Windows display topology manager (Extend/Internal)
+│   │   ├── SecondScreen.Input/      # Win32 touch & mouse injector (Native API)
+│   │   ├── SecondScreen.Media/      # GDI/DXGI screen capture, cursor overlay, MFT H.264 encoder
+│   │   └── SecondScreen.Network/    # TCP server, UDP beacon broadcaster, hotspot manager
+│   ├── tests/SecondScreen.Tests/    # XUnit unit & integration test suite (37 tests)
 │   └── WindowsHost.sln
 │
-├── docs/                            # Mimari dokümantasyon, protokol şartnameleri ve planlar
-│   ├── assets/                      # Logo ve ekran görüntüleri
-│   ├── PLAN.md                      # Aşama aşama geliştirme planı ve yol haritası
-│   └── PROTOCOL.md                  # İkili (Binary) haberleşme protokolü detayları
+├── docs/                            # Documentation, protocol specifications & roadmap
+│   ├── assets/                      # Logos and screenshots
+│   ├── PLAN.md                      # Comprehensive phased implementation plan
+│   └── PROTOCOL.md                  # Binary communication protocol specification
 │
-├── install-virtual-display.cmd      # Sanal ekran sürücüsü tek tık kurulum betiği
-├── uninstall-virtual-display.cmd    # Sanal ekran sürücüsü kaldırma betiği
-├── run-host.cmd                     # Windows Host başlatma komut dosyası
-└── run-host.ps1                     # Windows Host başlatma PowerShell betiği
+├── install-virtual-display.cmd      # One-click virtual display driver installer
+├── uninstall-virtual-display.cmd    # Virtual display driver uninstaller
+├── run-host.cmd                     # Windows Host launcher batch script
+└── run-host.ps1                     # Windows Host launcher PowerShell script
 ```
 
 ---
 
-## 🚀 Başlarken
+## 🚀 Getting Started
 
-### Gereksinimler
+### Prerequisites
 
 - **Windows PC:**
-  - Windows 10 (Build 19041+) veya Windows 11 (64-bit).
+  - Windows 10 (Build 19041+) or Windows 11 (64-bit).
   - [.NET 8.0 SDK](https://dotnet.microsoft.com/download/dotnet/8.0).
-  - H.264 donanım kodlama destekli ekran kartı (Intel UHD/Iris, NVIDIA GeForce veya AMD Radeon).
-  - Android Debug Bridge (ADB) — USB modu için önerilir.
+  - GPU with hardware H.264 encoding support (Intel UHD/Iris, NVIDIA GeForce, or AMD Radeon).
+  - Android Debug Bridge (ADB) — recommended for USB cable mode.
 - **Android Tablet:**
-  - Android 10 (API 29) veya üzeri (Samsung Galaxy Tab serisi ile optimize edilmiştir).
-  - Donanımsal H.264 çözücü (Snapdragon / Exynos yonga setleri).
+  - Android 10 (API 29) or higher (optimized for Samsung Galaxy Tab series).
+  - Hardware H.264 decoder (Snapdragon or Exynos SoC).
 
 ---
 
-### Kurulum Adımları
+### Installation & Usage
 
-#### 1. Sanal Ekran Sürücüsünü Kurun (Yalnızca İlk Seferde)
-Masaüstünü kopyalamak yerine tableti ayrı bir 2. monitör olarak kullanmak için sürücüyü yükleyin:
+#### 1. Install Virtual Display Driver (One-Time Setup)
+To enable Windows to recognize the tablet as an independent second monitor rather than mirroring:
 ```cmd
-:: Yönetici olarak çalıştırın:
+:: Run as Administrator:
 install-virtual-display.cmd
 ```
-*Bu komut Windows IddCx sanal ekran sürücüsünü sisteme tanır ve `2304x1440` çözünürlüklü 2. monitörü oluşturur.*
+*This installs the lightweight Windows IddCx Indirect Display Driver and activates the secondary display (`2304x1440`).*
 
-#### 2. Windows Host Uygulamasını Başlatın
+#### 2. Start Windows Host
 ```cmd
 run-host.cmd
 ```
-veya terminalden:
+or from PowerShell / Terminal:
 ```bash
 dotnet run --project windows-host/src/SecondScreen.App -c Release
 ```
 
-Host çalıştırıldığında:
-- USB ADB tünelini (`adb reverse tcp:27183`) otomatik açar.
-- Wi-Fi ve Hotspot IP adreslerini algılar.
-- UDP üzerinden ağa anons yapar (`27184`).
-- Tablet bağlandığında otomatik olarak masaüstünü 2. ekrana genişletir (`ExtendDesktop`).
+The host automatically:
+- Sets up the USB ADB reverse tunnel (`adb reverse tcp:27183`).
+- Detects Wi-Fi LAN and Mobile Hotspot interfaces.
+- Starts broadcasting UDP discovery beacons on port `27184`.
+- Automatically calls `ExtendDesktop` to activate the secondary display when the tablet connects.
 
-#### 3. Android İstemciyi Kurun ve Çalıştırın
-1. Projeyi Android Studio ile açın veya derlenmiş APK'yı yükleyin:
+#### 3. Install & Launch Android Client
+1. Open the project in Android Studio or install the APK via ADB:
    ```bash
    adb install android-client/app/build/outputs/apk/debug/app-debug.apk
    ```
-2. Tabletten **Areas** uygulamasını açın:
-   - USB kablosu takılıysa **USB Bağlantısı** butonuna dokunun.
-   - Wi-Fi üzerindeyse otomatik keşfedilen sunucuyu seçip bağlanın.
+2. Open **Areas** on your tablet:
+   - If connected via USB cable, tap **USB Connection**.
+   - If connected over Wi-Fi, select the auto-discovered PC from the list.
 
 ---
 
-## 📡 Haberleşme Protokolü
+## 📡 Binary Protocol Specification
 
-Areas, minimum ağ yükü ve maksimum hız için özel bir ikili (binary) framed protokol kullanır:
+Areas communicates over an efficient, big-endian framed binary protocol designed for minimal overhead and zero GC pressure:
 
-| Mesaj Türü | ID | Yön | Açıklama |
+| Packet Type | ID | Direction | Description |
 | :--- | :---: | :---: | :--- |
-| `HELLO` | `0x01` | Tablet ➔ PC | Cihaz modeli, çözünürlük (`2304x1440`), yenileme hızı ve istenen bitrate. |
-| `HELLO_ACK` | `0x02` | PC ➔ Tablet | Onaylanan akış parametreleri (genişlik, yükseklik, FPS, bitrate). |
-| `VIDEO_CONFIG` | `0x03` | PC ➔ Tablet | H.264 SPS ve PPS parametre setleri (Decoder başlatıcı). |
-| `VIDEO_FRAME` | `0x04` | PC ➔ Tablet | H.264 NAL birimleri (I-Frame veya P-Frame), zaman damgası ve kare numarası. |
-| `TOUCH` | `0x05` | Tablet ➔ PC | Çoklu dokunma noktaları (PointerId, Action: DOWN/MOVE/UP, Normalize Koordinatlar: `0..65535`). |
-| `KEYBOARD` | `0x06` | Tablet ➔ PC | Tuş kodu, ASCII/Unicode karakteri ve modifiye tuş bayrakları (Ctrl, Alt, Shift). |
-| `PING / PONG` | `0x07 / 0x08` | Çift Yönlü | Milisaniye altı RTT ağ gecikmesi ölçümü. |
-| `KEYFRAME_REQ` | `0x09` | Tablet ➔ PC | Kare kaybında anında yeni IDR anahtar kare talebi. |
+| `HELLO` | `0x01` | Tablet ➔ PC | Device model, native resolution (`2304x1440`), max refresh rate, and preferred bitrate. |
+| `HELLO_ACK` | `0x02` | PC ➔ Tablet | Stream confirmation parameters (width, height, FPS, allocated bitrate). |
+| `VIDEO_CONFIG` | `0x03` | PC ➔ Tablet | H.264 SPS and PPS parameter sets (MediaCodec initializer). |
+| `VIDEO_FRAME` | `0x04` | PC ➔ Tablet | H.264 NAL units (I-Frame / P-Frame), timestamp, and frame sequence number. |
+| `TOUCH` | `0x05` | Tablet ➔ PC | Multi-touch contact points (Pointer ID, Action: DOWN/MOVE/UP, Normalized coords: `0..65535`). |
+| `KEYBOARD` | `0x06` | Tablet ➔ PC | Virtual keycode, ASCII/Unicode character, and modifier flags (Ctrl, Alt, Shift). |
+| `PING / PONG` | `0x07 / 0x08` | Bi-directional | Sub-millisecond round-trip time (RTT) latency tracking. |
+| `KEYFRAME_REQ` | `0x09` | Tablet ➔ PC | Instant IDR keyframe request triggered upon packet loss or decoder sync loss. |
 
-> Detaylı protokol özellikleri için [`docs/PROTOCOL.md`](docs/PROTOCOL.md) belgesini inceleyin.
+> For complete payload definitions and packet structures, refer to [`docs/PROTOCOL.md`](docs/PROTOCOL.md).
 
 ---
 
-## 🧪 Testler
+## 🧪 Testing
 
-Çözümdeki tüm birim ve entegrasyon testlerini çalıştırmak için:
+Run the full xUnit test suite across the solution:
 ```bash
 dotnet test windows-host/WindowsHost.sln
 ```
-*Tüm 37 test (Ağ, Kodlayıcı, Protokol serileştirme, Monitör numaralandırma, Sanal ekran ve İmleç işleme) başarıyla doğrulanmıştır.*
+*All 37 unit and integration tests (Networking, Encoding, Protocol serialization, Display enumeration, Virtual display, and Cursor rendering) pass with zero errors.*
 
 ---
 
-## 🗺️ Geliştirme Yol Haritası
+## 🗺️ Roadmap & Milestones
 
-- [x] **Aşama 1: Temel Çekirdek & USB Akışı** (ADB reverse, H.264 Media Foundation & MediaCodec, SurfaceView).
-- [x] **Aşama 2: Gecikme Ölçümü & HUD** (Ping/Pong RTT, Canlı Telemetri Paneli, 60 FPS optimizasyonu).
-- [x] **Aşama 3: Wi-Fi LAN & İstemci İzolasyonu** (UDP Discovery, Client Isolation uyarı sistemi, Keyframe koruması).
-- [x] **Aşama 4A: Windows Hotspot & Dinamik Bitrate** (Yurt/Okul Wi-Fi desteği, adaptif kalite yönetimi).
-- [x] **Aşama 5: Gelişmiş Girdi & Sanal Klavye** (Windows dokunma hareketleri, fare tekerleği, Moonlight klavye paneli).
-- [x] **Aşama 6: Sanal Monitör & Genişletilmiş Masaüstü** (IddCx sürücüsü, çoklu ekran topolojisi, High-DPI imleç çizimi).
+- [x] **Stage 1: Core USB Streaming** (ADB reverse, H.264 Media Foundation & MediaCodec, SurfaceView).
+- [x] **Stage 2: Latency Measurement & HUD** (Ping/Pong RTT, Live Telemetry Overlay, 60 FPS pipeline).
+- [x] **Stage 3: Wi-Fi LAN & Discovery** (UDP Auto-discovery, Client Isolation detection, Keyframe recovery).
+- [x] **Stage 4A: Mobile Hotspot & Adaptive Bitrate** (Dorm/Campus Wi-Fi support, network congestion control).
+- [x] **Stage 5: Input & Virtual Keyboard** (Windows touch gestures, mouse wheel emulation, Moonlight on-screen keyboard).
+- [x] **Stage 6: Virtual Display & Extended Desktop** (IddCx driver integration, multi-monitor topology, High-DPI cursor overlay).
 
 ---
 
-## 📄 Lisans
+## 📄 License
 
-Bu proje [MIT Lisansı](LICENSE) altında lisanslanmıştır. Dilediğiniz gibi kullanabilir, değiştirebilir ve geliştirebilirsiniz.
+This project is licensed under the [MIT License](LICENSE). Feel free to use, modify, and distribute it freely.
