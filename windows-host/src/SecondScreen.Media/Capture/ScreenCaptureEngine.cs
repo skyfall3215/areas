@@ -33,7 +33,7 @@ public sealed class ScreenCaptureEngine : IDisposable
         }
 
         // 2. High-performance GDI fallback (bulletproof across hybrid GPUs, virtual screens, IddCx)
-        if (_gdi.Initialize(targetBounds))
+        if (_gdi.Initialize(targetBounds, targetDeviceName))
         {
             _useGdi = true;
             Console.WriteLine($"[ScreenCapture] Yüksek Hızlı GDI Yakalama devrede: {targetBounds.X},{targetBounds.Y} {targetBounds.Width}x{targetBounds.Height}");

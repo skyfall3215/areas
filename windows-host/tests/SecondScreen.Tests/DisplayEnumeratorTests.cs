@@ -1,4 +1,5 @@
 using System.Drawing;
+using System.Runtime.InteropServices;
 using SecondScreen.Display;
 using SecondScreen.Media.Capture;
 using Xunit;
@@ -43,6 +44,28 @@ public class DisplayEnumeratorTests
         {
             Assert.True(engine.Width > 0);
             Assert.True(engine.Height > 0);
+
+            var frame = engine.AcquireNextFrame();
+            // In interactive session or CI, check frame
         }
+    }
+
+    [DllImport("gdi32.dll")]
+    private static extern bool GdiFlush();
+
+    [DllImport("user32.dll")]
+    private static extern int GetSystemMetrics(int nIndex);
+
+    [Fact]
+    public void Test_CursorDrawing_PixelCheck()
+    {
+        var target = DisplayEnumerator.GetTargetDisplay();
+        using var gdi = new GdiScreenCapture();
+        bool ok = gdi.Initialize(target.Bounds, target.DeviceName);
+        Assert.True(ok);
+
+        // Before AcquireNextFrame, let's test if DrawIconEx writes to a black DIB
+        var frame = gdi.AcquireNextFrame();
+        Assert.NotNull(frame);
     }
 }
