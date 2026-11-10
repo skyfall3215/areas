@@ -135,8 +135,13 @@ public sealed class SecondScreenServer : IDisposable
             }
             finally
             {
+                bool wasConnected = IsClientConnected;
                 ConnectedClientName = null;
                 ConnectedClientDetails = null;
+                if (wasConnected)
+                {
+                    try { DisplayTopologyManager.RestoreInternalOnly(); } catch { }
+                }
                 OnClientSessionChanged?.Invoke(null);
                 if (IsRunning)
                 {
@@ -170,7 +175,10 @@ public sealed class SecondScreenServer : IDisposable
         // 2. Automatically extend Windows desktop so the virtual second screen is attached
         try
         {
-            DisplayTopologyManager.ExtendDesktop();
+            if (DisplayTopologyManager.ExtendDesktop())
+            {
+                Log("[+] Tablet bağlandı: Masaüstü otomatik olarak İkinci Ekran (Extend) moduna geçirildi.");
+            }
             await Task.Delay(500, sessionCts.Token);
         }
         catch { }
@@ -474,6 +482,19 @@ public sealed class SecondScreenServer : IDisposable
             sessionCts.Cancel();
             try { await Task.WhenAll(receiveTask, pingTask); } catch { }
             Log($"[-] Tablet bağlantısı sonlandı. Toplam gönderilen kare: {finalFrameNumber}");
+
+            // Tablet bağlantısı koptuğunda otomatik olarak Laptop Screen (Internal Only) moduna dön
+            try
+            {
+                if (DisplayTopologyManager.RestoreInternalOnly())
+                {
+                    Log("[+] Tablet ayrıldı: Masaüstü otomatik olarak Yalnızca Laptop Ekranı (Internal Only) moduna döndürüldü.");
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"[!] Ekran topolojisi sıfırlanamadı: {ex.Message}");
+            }
         }
     }
 
@@ -481,6 +502,7 @@ public sealed class SecondScreenServer : IDisposable
     {
         if (!IsRunning) return;
 
+        bool wasConnected = IsClientConnected;
         IsRunning = false;
         _serverCts?.Cancel();
         try { _listener?.Stop(); } catch { }
@@ -490,6 +512,11 @@ public sealed class SecondScreenServer : IDisposable
         _broadcaster = null;
         ConnectedClientName = null;
         ConnectedClientDetails = null;
+
+        if (wasConnected)
+        {
+            try { DisplayTopologyManager.RestoreInternalOnly(); } catch { }
+        }
 
         TimeEndPeriod(1);
         OnStatusChanged?.Invoke("Durduruldu");

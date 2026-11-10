@@ -70,7 +70,7 @@ public sealed class ServerDashboardForm : Form
 
     private void InitializeCustomForm()
     {
-        Text = "Areas — SecondScreen Server (v1.0.1)";
+        Text = "Areas — SecondScreen Server (v1.0.2)";
         Size = new Size(950, 760);
         MinimumSize = new Size(900, 720);
         StartPosition = FormStartPosition.CenterScreen;
@@ -413,7 +413,7 @@ public sealed class ServerDashboardForm : Form
         // Tray Menu Items
         if (_itemTitle != null)
         {
-            _itemTitle.Text = $"Areas Server (v1.0.1) — {(isEn ? "English" : "Türkçe")}";
+            _itemTitle.Text = $"Areas Server (v1.0.2) — {(isEn ? "English" : "Türkçe")}";
             _itemShow.Text = isEn ? "Open Dashboard" : "Arayüzü Aç";
             _itemExtend.Text = isEn ? "Extend Desktop" : "Masaüstünü Genişlet";
             _itemExit.Text = isEn ? "Exit" : "Çıkış";
@@ -527,7 +527,7 @@ public sealed class ServerDashboardForm : Form
         _trayIcon.Text = "Areas Server — Second Screen";
         _trayIcon.Visible = true;
 
-        _itemTitle = new ToolStripMenuItem("Areas Server (v1.0.1)") { Enabled = false };
+        _itemTitle = new ToolStripMenuItem("Areas Server (v1.0.2)") { Enabled = false };
         _itemShow = new ToolStripMenuItem("Open Dashboard", null, (_, _) => RestoreFromTray());
         _itemExtend = new ToolStripMenuItem("Extend Desktop", null, (_, _) => DisplayTopologyManager.ExtendDesktop());
         _itemExit = new ToolStripMenuItem("Exit", null, (_, _) => ExitApp());
@@ -584,18 +584,20 @@ public sealed class ServerDashboardForm : Form
 
         _server.OnClientSessionChanged += _ =>
         {
-            if (InvokeRequired)
-            {
-                BeginInvoke(() =>
-                {
-                    UpdateStatusBadge();
-                    UpdateSessionDetails();
-                });
-            }
-            else
+            void RefreshUi()
             {
                 UpdateStatusBadge();
                 UpdateSessionDetails();
+                UpdateDisplayInfo();
+            }
+
+            if (InvokeRequired)
+            {
+                BeginInvoke(RefreshUi);
+            }
+            else
+            {
+                RefreshUi();
             }
         };
 

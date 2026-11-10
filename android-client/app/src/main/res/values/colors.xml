@@ -1,9 +1,10 @@
 <resources>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
-    <color name="primary">#FF1976D2</color>
-    <color name="surface_bg">#FF121212</color>
-    <color name="status_green">#FF4CAF50</color>
-    <color name="status_red">#FFF44336</color>
+    <color name="primary">#FF2563EB</color>
+    <color name="surface_bg">#FF0E0E12</color>
+    <color name="card_bg">#EE181820</color>
+    <color name="status_green">#FF22C55E</color>
+    <color name="status_red">#FFEF4444</color>
+    <color name="accent_purple">#FFA78BFA</color>
 </resources>
-

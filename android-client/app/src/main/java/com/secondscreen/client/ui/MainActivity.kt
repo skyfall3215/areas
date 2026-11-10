@@ -71,7 +71,8 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
     private var lastStreamWidth = 1920
     private var lastStreamHeight = 1080
     private val telemetry = TelemetryTracker()
-    private var isHudDetailed = true
+    private var isStatsMenuOpen = false
+    private var activeTransport: SocketTransport? = null
     private var wifiLock: WifiManager.WifiLock? = null
 
     private val discoveryListener = LanDiscoveryListener()
@@ -181,14 +182,20 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
             cancelActiveSession()
         }
 
+        binding.btnToggleStats.setOnClickListener {
+            toggleStatsMenu()
+        }
+
+        binding.btnCloseStats.setOnClickListener {
+            setStatsMenuVisible(false)
+        }
+
         binding.hudOverlay.setOnClickListener {
-            isHudDetailed = !isHudDetailed
-            binding.txtHudHeader.visibility = if (isHudDetailed) View.VISIBLE else View.GONE
-            binding.txtHudSentBitrate.visibility = if (isHudDetailed) View.VISIBLE else View.GONE
-            binding.txtHudEncode.visibility = if (isHudDetailed) View.VISIBLE else View.GONE
-            binding.txtHudNetwork.visibility = if (isHudDetailed) View.VISIBLE else View.GONE
-            binding.txtHudDecode.visibility = if (isHudDetailed) View.VISIBLE else View.GONE
-            binding.txtHudLoss.visibility = if (isHudDetailed) View.VISIBLE else View.GONE
+            setStatsMenuVisible(false)
+        }
+
+        binding.btnDisconnectStream.setOnClickListener {
+            cancelActiveSession()
         }
 
         binding.btnToggleKeyboard.setOnClickListener {
@@ -232,7 +239,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
         if (isStreamingActive && lastStreamWidth > 0 && lastStreamHeight > 0) {
-            // Allow interacting with the HUD overlay if visible
+            // Allow interacting with the Stats/HUD menu if visible
             if (binding.hudOverlay.visibility == View.VISIBLE) {
                 val hudRect = android.graphics.Rect()
                 binding.hudOverlay.getGlobalVisibleRect(hudRect)
@@ -240,11 +247,11 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                     return super.dispatchTouchEvent(ev)
                 }
             }
-            // Allow clicking the floating keyboard button if visible
-            if (binding.btnToggleKeyboard.visibility == View.VISIBLE) {
-                val btnRect = android.graphics.Rect()
-                binding.btnToggleKeyboard.getGlobalVisibleRect(btnRect)
-                if (btnRect.contains(ev.rawX.toInt(), ev.rawY.toInt())) {
+            // Allow clicking the floating control dock (Keyboard, Stats, Exit) if visible
+            if (binding.floatingControlDock.visibility == View.VISIBLE) {
+                val dockRect = android.graphics.Rect()
+                binding.floatingControlDock.getGlobalVisibleRect(dockRect)
+                if (dockRect.contains(ev.rawX.toInt(), ev.rawY.toInt())) {
                     return super.dispatchTouchEvent(ev)
                 }
             }
@@ -253,6 +260,18 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
             }
         }
         return super.dispatchTouchEvent(ev)
+    }
+
+    private fun toggleStatsMenu() {
+        setStatsMenuVisible(!isStatsMenuOpen)
+    }
+
+    private fun setStatsMenuVisible(visible: Boolean) {
+        isStatsMenuOpen = visible
+        binding.hudOverlay.visibility = if (visible) View.VISIBLE else View.GONE
+        binding.btnToggleStats.setTextColor(
+            if (visible) Color.parseColor("#A78BFA") else Color.parseColor("#E2E8F0")
+        )
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
@@ -559,15 +578,16 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
         for (host in hosts) {
             val btn = Button(this).apply {
-                text = "${host.hostname} (${host.ipAddress})"
-                textSize = 12f
+                text = "🖥️ ${host.hostname} (${host.ipAddress})"
+                textSize = 13f
+                isAllCaps = false
                 setTextColor(Color.WHITE)
-                setBackgroundColor(0xFF263238.toInt())
+                setBackgroundColor(0xFF1E293B.toInt())
                 val params = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT
                 ).apply {
-                    setMargins(0, 4, 0, 4)
+                    setMargins(0, 6, 0, 6)
                 }
                 layoutParams = params
                 setOnClickListener {
@@ -681,9 +701,8 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 if (binding.controlOverlay.visibility != View.VISIBLE) {
                     binding.controlOverlay.visibility = View.VISIBLE
                 }
-                binding.txtBanner.visibility = View.GONE
-                binding.hudOverlay.visibility = View.GONE
-                binding.btnToggleKeyboard.visibility = View.GONE
+                setStatsMenuVisible(false)
+                binding.floatingControlDock.visibility = View.GONE
                 if (isKeyboardVisible) {
                     toggleSoftKeyboard()
                 }
@@ -693,17 +712,28 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
     private fun cancelActiveSession() {
         userCancelled = true
+        val currentTransport = activeTransport
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                if (currentTransport != null && currentTransport.isConnected) {
+                    val discHeader = FrameHeader.create(MessageType.DISCONNECT, 0L, sequence = 9999)
+                    currentTransport.sendPacket(discHeader, ByteArray(0))
+                }
+            } catch (_: Exception) {
+            } finally {
+                try { currentTransport?.close() } catch (_: Exception) {}
+            }
+        }
         sessionJob?.cancel()
-        binding.txtStatus.text = "Bağlantı kullanıcı tarafından iptal edildi."
+        binding.txtStatus.text = "Bağlantı sonlandırıldı."
         binding.txtStatus.setTextColor(getColor(android.R.color.darker_gray))
         binding.btnConnectUsb.isEnabled = true
         binding.btnConnectHotspot.isEnabled = true
         binding.btnConnectWifi.isEnabled = true
         binding.btnCancel.visibility = View.GONE
         binding.controlOverlay.visibility = View.VISIBLE
-        binding.txtBanner.visibility = View.GONE
-        binding.hudOverlay.visibility = View.GONE
-        binding.btnToggleKeyboard.visibility = View.GONE
+        setStatsMenuVisible(false)
+        binding.floatingControlDock.visibility = View.GONE
         if (isKeyboardVisible) {
             toggleSoftKeyboard()
         }
@@ -711,6 +741,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
     private suspend fun runStreamingSession(host: String, port: Int) = kotlinx.coroutines.coroutineScope {
         val transport = SocketTransport(host, port, connectTimeoutMs = 2500)
+        activeTransport = transport
         acquireWifiLock()
 
         try {
@@ -763,15 +794,15 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
             withContext(Dispatchers.Main) {
                 binding.txtStatus.text = "Bağlandı (${ack.streamWidth}x${ack.streamHeight} @ ${ack.targetFps} FPS, ${ack.bitrateBps / 1_000_000} Mbps)"
                 binding.controlOverlay.visibility = View.GONE
-                binding.txtBanner.visibility = View.VISIBLE
                 val modeLabel = when {
                     isUsb -> "USB"
                     host == "192.168.137.1" -> "Hotspot"
                     else -> "Wi-Fi: $host"
                 }
-                binding.txtBanner.text = "Yayın Aktif: ${ack.streamWidth}x${ack.streamHeight} [$modeLabel]"
-                binding.hudOverlay.visibility = View.VISIBLE
-                binding.btnToggleKeyboard.visibility = View.VISIBLE
+                binding.txtBanner.text = "Yayın: ${ack.streamWidth}x${ack.streamHeight} [$modeLabel]"
+                // Keep statistics menu hidden by default so it does not cover the screen; user opens it via Stats button
+                setStatsMenuVisible(false)
+                binding.floatingControlDock.visibility = View.VISIBLE
             }
 
             isStreamingActive = true
@@ -914,6 +945,9 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 pingJob.cancel()
             }
         } finally {
+            if (activeTransport === transport) {
+                activeTransport = null
+            }
             releaseWifiLock()
             transport.close()
         }
