@@ -403,42 +403,55 @@ public sealed class GdiScreenCapture : IDisposable
 
     public CapturedFrame? AcquireNextFrame()
     {
-        if (!_isInitialized || _buffer == null || _pBits == IntPtr.Zero || _hdcSrc == IntPtr.Zero) return null;
+        if (!_isInitialized || _buffer == null || _pBits == IntPtr.Zero) return null;
 
-        bool success = BitBlt(_hdcMem, 0, 0, _width, _height, _hdcSrc, _x, _y, SRCCOPY);
-        if (!success)
+        try
         {
-            EnsureThreadDesktopAttached();
-            IntPtr hdcScreen = GetDC(IntPtr.Zero);
-            if (hdcScreen != IntPtr.Zero)
+            bool success = _hdcSrc != IntPtr.Zero && BitBlt(_hdcMem, 0, 0, _width, _height, _hdcSrc, _x, _y, SRCCOPY);
+            if (!success)
             {
-                success = BitBlt(_hdcMem, 0, 0, _width, _height, hdcScreen, _x, _y, SRCCOPY);
-                ReleaseDC(IntPtr.Zero, hdcScreen);
+                EnsureThreadDesktopAttached();
+                IntPtr hdcScreen = GetDC(IntPtr.Zero);
+                if (hdcScreen != IntPtr.Zero)
+                {
+                    if (_hdcSrc != IntPtr.Zero)
+                    {
+                        if (_usedCreateDc) DeleteDC(_hdcSrc);
+                        else ReleaseDC(IntPtr.Zero, _hdcSrc);
+                    }
+                    _hdcSrc = hdcScreen;
+                    _usedCreateDc = false;
+                    success = BitBlt(_hdcMem, 0, 0, _width, _height, _hdcSrc, _x, _y, SRCCOPY);
+                }
             }
+
+            if (!success) return null;
+
+            // Draw the genuine native Windows cursor (arrow, hand, I-beam, resize, etc.) onto _hdcMem before copying pixels
+            bool nativeCursorDrawn = DrawNativeCursorOnDc();
+
+            int totalBytes = _width * _height * 4;
+            Marshal.Copy(_pBits, _buffer, 0, totalBytes);
+
+            // Fallback to software cursor only if native DrawIconEx did not draw
+            if (!nativeCursorDrawn && GetCursorPos(out var pt))
+            {
+                DrawSoftwareCursor(_buffer, pt.x, pt.y);
+            }
+
+            return new CapturedFrame
+            {
+                RgbaData = _buffer,
+                Width = _width,
+                Height = _height,
+                TimestampUs = DateTime.UtcNow.Ticks / 10,
+                IsNew = true
+            };
         }
-
-        if (!success) return null;
-
-        // Draw the genuine native Windows cursor (arrow, hand, I-beam, resize, etc.) onto _hdcMem before copying pixels
-        bool nativeCursorDrawn = DrawNativeCursorOnDc();
-
-        int totalBytes = _width * _height * 4;
-        Marshal.Copy(_pBits, _buffer, 0, totalBytes);
-
-        // Fallback to software cursor only if native DrawIconEx did not draw
-        if (!nativeCursorDrawn && GetCursorPos(out var pt))
+        catch
         {
-            DrawSoftwareCursor(_buffer, pt.x, pt.y);
+            return null;
         }
-
-        return new CapturedFrame
-        {
-            RgbaData = _buffer,
-            Width = _width,
-            Height = _height,
-            TimestampUs = DateTime.UtcNow.Ticks / 10,
-            IsNew = true
-        };
     }
 
     private bool DrawNativeCursorOnDc()

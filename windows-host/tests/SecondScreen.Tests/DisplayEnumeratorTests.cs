@@ -86,4 +86,35 @@ public class DisplayEnumeratorTests
         using var form = new SecondScreen.App.ServerDashboardForm();
         Assert.NotNull(form);
     }
+
+    [Fact]
+    public void ScreenCaptureEngine_SurvivesUacDesktopSwitch_AndAutoRecovers()
+    {
+        var target = DisplayEnumerator.GetTargetDisplay();
+        using var engine = new ScreenCaptureEngine();
+        bool ok = engine.Initialize(target.DeviceName, target.Bounds);
+        Assert.True(ok);
+        Assert.True(engine.IsInitialized);
+
+        var initialFrame = engine.AcquireNextFrame(16);
+        Assert.NotNull(initialFrame);
+        Assert.NotNull(initialFrame!.RgbaData);
+
+        // Simulate UAC / Winlogon secure desktop switch dropping DXGI duplication
+        engine.SimulateDesktopSwitchOrUac();
+
+        // Engine must remain initialized so SecondScreenServer loop never stops calling AcquireNextFrame
+        Assert.True(engine.IsInitialized);
+
+        // Immediate call during UAC throttle window must return cached frame without throwing or returning null
+        var duringUacFrame = engine.AcquireNextFrame(0);
+        Assert.NotNull(duringUacFrame);
+        Assert.NotNull(duringUacFrame!.RgbaData);
+
+        // After 250ms (UAC dismissed), AcquireNextFrame must automatically re-initialize DXGI and resume live capture
+        System.Threading.Thread.Sleep(250);
+        var recoveredFrame = engine.AcquireNextFrame(50);
+        Assert.NotNull(recoveredFrame);
+        Assert.NotNull(recoveredFrame!.RgbaData);
+    }
 }

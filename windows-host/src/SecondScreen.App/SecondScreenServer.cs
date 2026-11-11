@@ -371,106 +371,111 @@ public sealed class SecondScreenServer : IDisposable
                     }
                     long frameStartUs = (frameStartTicks * 1_000_000) / Stopwatch.Frequency;
 
-                    if (Interlocked.Exchange(ref requestKeyframeFlag, 0) == 1 ||
-                        frameNumber == 45 || frameNumber == 90 || frameNumber == 150)
+                    try
                     {
-                        encoder.RequestKeyframe();
-                    }
-
-                    byte[] bgraData;
-                    ushort captureDurationUs = 0;
-
-                    if (captureOk && capture.IsInitialized)
-                    {
-                        var capSw = Stopwatch.StartNew();
-                        var frame = capture.AcquireNextFrame(0);
-                        capSw.Stop();
-                        captureDurationUs = (ushort)Math.Min(capSw.Elapsed.TotalMicroseconds, ushort.MaxValue);
-
-                        if (frame != null && frame.RgbaData != null && frame.RgbaData.Length >= streamWidth * streamHeight * 4)
+                        if (Interlocked.Exchange(ref requestKeyframeFlag, 0) == 1 ||
+                            frameNumber == 45 || frameNumber == 90 || frameNumber == 150)
                         {
-                            bgraData = frame.RgbaData;
-                            lastValidBgra = bgraData;
-                            // When DWM finishes painting the newly extended virtual desktop for the first time,
-                            // or after returning from UAC prompt, force an immediate IDR keyframe!
-                            if (frame.IsNew && !sawFirstNewDxgiFrame)
+                            encoder.RequestKeyframe();
+                        }
+
+                        byte[] bgraData;
+                        ushort captureDurationUs = 0;
+
+                        if (captureOk && capture.IsInitialized)
+                        {
+                            var capSw = Stopwatch.StartNew();
+                            var frame = capture.AcquireNextFrame(0);
+                            capSw.Stop();
+                            captureDurationUs = (ushort)Math.Min(capSw.Elapsed.TotalMicroseconds, ushort.MaxValue);
+
+                            if (frame != null && frame.RgbaData != null && frame.RgbaData.Length >= streamWidth * streamHeight * 4)
                             {
-                                sawFirstNewDxgiFrame = true;
-                                encoder.RequestKeyframe();
+                                bgraData = frame.RgbaData;
+                                lastValidBgra = bgraData;
+                                // When DWM finishes painting the newly extended virtual desktop for the first time,
+                                // or immediately after returning from a UAC prompt, force an IDR keyframe!
+                                if (frame.ForceKeyframe || (frame.IsNew && !sawFirstNewDxgiFrame))
+                                {
+                                    sawFirstNewDxgiFrame = true;
+                                    encoder.RequestKeyframe();
+                                }
+                            }
+                            else if (lastValidBgra != null)
+                            {
+                                bgraData = lastValidBgra;
+                                sawFirstNewDxgiFrame = false;
+                            }
+                            else
+                            {
+                                GenerateTestPattern(testPatternBgra, streamWidth, streamHeight, frameNumber);
+                                bgraData = testPatternBgra;
                             }
                         }
                         else if (lastValidBgra != null)
                         {
-                            // During UAC desktop switch or temporary DXGI re-attach, freeze on last known valid desktop frame
-                            // instead of generating an animated test pattern!
                             bgraData = lastValidBgra;
-                            sawFirstNewDxgiFrame = false; // Trigger keyframe once DXGI re-attaches
+                            sawFirstNewDxgiFrame = false;
+                            captureDurationUs = 500;
                         }
                         else
                         {
                             GenerateTestPattern(testPatternBgra, streamWidth, streamHeight, frameNumber);
                             bgraData = testPatternBgra;
+                            captureDurationUs = 500;
+                        }
+
+                        // Encode
+                        var encSw = Stopwatch.StartNew();
+                        var encoded = encoder.EncodeBgraFrame(bgraData, frameStartUs);
+                        encSw.Stop();
+                        ushort encodeDurationUs = (ushort)Math.Min(encSw.Elapsed.TotalMicroseconds, ushort.MaxValue);
+
+                        if (encoded != null)
+                        {
+                            if (encoded.SpsPpsConfig != null && (!configSent || encoded.IsKeyframe))
+                            {
+                                var cfgHeader = FrameHeader.Create(
+                                    MessageType.VideoConfig,
+                                    (uint)encoded.SpsPpsConfig.Length,
+                                    sequence: (ushort)(Interlocked.Increment(ref sequence) & 0xFFFF),
+                                    timestampUs: (uint)frameStartUs);
+                                videoChannel.Writer.TryWrite((cfgHeader, encoded.SpsPpsConfig));
+                                configSent = true;
+                            }
+
+                            if (videoChannel.Reader.Count < 4 || encoded.IsKeyframe)
+                            {
+                                sentFrameCount = ++frameNumber;
+                                var frameMsg = new VideoFrameMessage(
+                                    FrameNumber: frameNumber,
+                                    CaptureDurationUs: captureDurationUs,
+                                    EncodeDurationUs: encodeDurationUs,
+                                    NalData: encoded.Data,
+                                    IsKeyframe: encoded.IsKeyframe);
+
+                                byte[] framePayload = new byte[frameMsg.PayloadSize];
+                                frameMsg.WritePayloadTo(framePayload);
+
+                                var frameHeader = FrameHeader.Create(
+                                    MessageType.VideoFrame,
+                                    (uint)framePayload.Length,
+                                    sequence: (ushort)(Interlocked.Increment(ref sequence) & 0xFFFF),
+                                    timestampUs: (uint)frameStartUs,
+                                    flags: frameMsg.GetFlags());
+
+                                videoChannel.Writer.TryWrite((frameHeader, framePayload));
+                            }
+                            else
+                            {
+                                // Network sender is temporarily behind; drop stale frame and request fresh IDR so decoder stays in sync
+                                encoder.RequestKeyframe();
+                            }
                         }
                     }
-                    else if (lastValidBgra != null)
+                    catch (Exception frameEx)
                     {
-                        bgraData = lastValidBgra;
-                        sawFirstNewDxgiFrame = false;
-                        captureDurationUs = 500;
-                    }
-                    else
-                    {
-                        GenerateTestPattern(testPatternBgra, streamWidth, streamHeight, frameNumber);
-                        bgraData = testPatternBgra;
-                        captureDurationUs = 500;
-                    }
-
-                    // Encode
-                    var encSw = Stopwatch.StartNew();
-                    var encoded = encoder.EncodeBgraFrame(bgraData, frameStartUs);
-                    encSw.Stop();
-                    ushort encodeDurationUs = (ushort)Math.Min(encSw.Elapsed.TotalMicroseconds, ushort.MaxValue);
-
-                    if (encoded != null)
-                    {
-                        if (encoded.SpsPpsConfig != null && (!configSent || encoded.IsKeyframe))
-                        {
-                            var cfgHeader = FrameHeader.Create(
-                                MessageType.VideoConfig,
-                                (uint)encoded.SpsPpsConfig.Length,
-                                sequence: (ushort)(Interlocked.Increment(ref sequence) & 0xFFFF),
-                                timestampUs: (uint)frameStartUs);
-                            videoChannel.Writer.TryWrite((cfgHeader, encoded.SpsPpsConfig));
-                            configSent = true;
-                        }
-
-                        if (videoChannel.Reader.Count < 4 || encoded.IsKeyframe)
-                        {
-                            sentFrameCount = ++frameNumber;
-                            var frameMsg = new VideoFrameMessage(
-                                FrameNumber: frameNumber,
-                                CaptureDurationUs: captureDurationUs,
-                                EncodeDurationUs: encodeDurationUs,
-                                NalData: encoded.Data,
-                                IsKeyframe: encoded.IsKeyframe);
-
-                            byte[] framePayload = new byte[frameMsg.PayloadSize];
-                            frameMsg.WritePayloadTo(framePayload);
-
-                            var frameHeader = FrameHeader.Create(
-                                MessageType.VideoFrame,
-                                (uint)framePayload.Length,
-                                sequence: (ushort)(Interlocked.Increment(ref sequence) & 0xFFFF),
-                                timestampUs: (uint)frameStartUs,
-                                flags: frameMsg.GetFlags());
-
-                            videoChannel.Writer.TryWrite((frameHeader, framePayload));
-                        }
-                        else
-                        {
-                            // Network sender is temporarily behind; drop stale frame and request fresh IDR so decoder stays in sync
-                            encoder.RequestKeyframe();
-                        }
+                        Console.WriteLine($"[SecondScreenServer] Kare işleme hatası (yoksayıldı): {frameEx.Message}");
                     }
 
                     // High-precision frame rate pacing (solid 60.0 FPS)

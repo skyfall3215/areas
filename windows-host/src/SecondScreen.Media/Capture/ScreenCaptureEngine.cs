@@ -7,23 +7,22 @@ public sealed class ScreenCaptureEngine : IDisposable
     private readonly DxgiScreenCapture _dxgi = new();
     private readonly GdiScreenCapture _gdi = new();
     private bool _useGdi;
+    private bool _isInitialized;
 
     private Rectangle _targetBounds;
     private string? _targetDeviceName;
-    private int _dxgiNullStreak;
 
-    public int Width => _useGdi ? _gdi.Width : _dxgi.Width;
-    public int Height => _useGdi ? _gdi.Height : _dxgi.Height;
-    public bool IsInitialized => _useGdi ? _gdi.IsInitialized : _dxgi.IsInitialized;
+    public int Width => !_useGdi && _dxgi.Width > 0 ? _dxgi.Width : (_gdi.Width > 0 ? _gdi.Width : (_targetBounds.Width & ~1));
+    public int Height => !_useGdi && _dxgi.Height > 0 ? _dxgi.Height : (_gdi.Height > 0 ? _gdi.Height : (_targetBounds.Height & ~1));
+    public bool IsInitialized => _isInitialized;
 
     public bool Initialize(string? targetDeviceName, Rectangle targetBounds)
     {
         GdiScreenCapture.EnsureThreadDesktopAttached();
         _targetDeviceName = targetDeviceName;
         _targetBounds = targetBounds;
-        _dxgiNullStreak = 0;
 
-        // Always initialize GDI as an instant fallback if DXGI is warming up or loses access
+        // Always initialize GDI as an instant fallback if DXGI is warming up
         bool gdiOk = _gdi.Initialize(targetBounds, targetDeviceName);
 
         // 1. Hardware DXGI Output Duplication first (~0.05-1.5 ms capture latency, works on IddCx virtual displays and hybrid GPUs, with native cursor overlay)
@@ -37,6 +36,7 @@ public sealed class ScreenCaptureEngine : IDisposable
                     _dxgi.AcquireNextFrame(50);
                     _dxgi.AcquireNextFrame(50);
                     _useGdi = false;
+                    _isInitialized = true;
                     Console.WriteLine($"[ScreenCapture] Donanımsal DXGI Yakalama devrede: {targetDeviceName} ({_dxgi.Width}x{_dxgi.Height})");
                     return true;
                 }
@@ -51,53 +51,53 @@ public sealed class ScreenCaptureEngine : IDisposable
         if (gdiOk)
         {
             _useGdi = true;
+            _isInitialized = true;
             Console.WriteLine($"[ScreenCapture] GDI Yakalama devrede: {targetBounds.X},{targetBounds.Y} {targetBounds.Width}x{targetBounds.Height}");
             return true;
         }
 
+        _isInitialized = false;
         return false;
     }
 
     public CapturedFrame? AcquireNextFrame(int timeoutMs = 0)
     {
-        if (_useGdi)
+        try
         {
-            return _gdi.AcquireNextFrame();
-        }
-
-        var dxgiFrame = _dxgi.AcquireNextFrame(timeoutMs);
-        if (dxgiFrame != null)
-        {
-            _dxgiNullStreak = 0;
-            return dxgiFrame;
-        }
-
-        // If DXGI failed or lost access (e.g. UAC prompt switched desktop to Winlogon),
-        // try re-attaching current thread desktop and re-initializing DXGI periodically
-        _dxgiNullStreak++;
-        if (_dxgiNullStreak % 30 == 0)
-        {
-            GdiScreenCapture.EnsureThreadDesktopAttached();
-            if (!string.IsNullOrEmpty(_targetDeviceName))
+            if (_useGdi)
             {
-                _dxgi.Initialize(_targetDeviceName);
+                return _gdi.AcquireNextFrame();
+            }
+
+            var dxgiFrame = _dxgi.AcquireNextFrame(timeoutMs);
+            if (dxgiFrame != null)
+            {
+                return dxgiFrame;
+            }
+
+            // Fallback to GDI only if DXGI hasn't acquired its very first surface yet
+            if (_gdi.IsInitialized)
+            {
+                return _gdi.AcquireNextFrame();
             }
         }
-
-        // Seamless fallback to GDI or previous frame
-        if (_gdi.IsInitialized)
+        catch (Exception ex)
         {
-            var gdiFrame = _gdi.AcquireNextFrame();
-            if (gdiFrame != null) return gdiFrame;
+            Console.WriteLine($"[ScreenCapture] Kare yakalama istisnası: {ex.Message}");
         }
 
         return null;
     }
 
+    public void SimulateDesktopSwitchOrUac()
+    {
+        _dxgi.ReleaseDuplicationObjects();
+    }
+
     public void Dispose()
     {
+        _isInitialized = false;
         _dxgi.Dispose();
         _gdi.Dispose();
     }
 }
-
