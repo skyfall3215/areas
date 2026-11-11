@@ -213,6 +213,7 @@ public sealed class DxgiScreenCapture : IDisposable
                 result == DxgiResultCode.AccessDenied ||
                 result == DxgiResultCode.InvalidCall)
             {
+                GdiScreenCapture.EnsureThreadDesktopAttached();
                 if (Initialize(_targetDeviceName, _outputIndex))
                 {
                     // Immediately attempt one quick read on the re-created duplication session

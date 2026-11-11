@@ -72,12 +72,23 @@ public sealed class ScreenCaptureEngine : IDisposable
             return dxgiFrame;
         }
 
-        // If DXGI hasn't produced a composited desktop frame yet (e.g. during DWM ExtendDesktop transition),
-        // seamlessly fall back to GDI so we never send synthetic test patterns or black frames
+        // If DXGI failed or lost access (e.g. UAC prompt switched desktop to Winlogon),
+        // try re-attaching current thread desktop and re-initializing DXGI periodically
         _dxgiNullStreak++;
+        if (_dxgiNullStreak % 30 == 0)
+        {
+            GdiScreenCapture.EnsureThreadDesktopAttached();
+            if (!string.IsNullOrEmpty(_targetDeviceName))
+            {
+                _dxgi.Initialize(_targetDeviceName);
+            }
+        }
+
+        // Seamless fallback to GDI or previous frame
         if (_gdi.IsInitialized)
         {
-            return _gdi.AcquireNextFrame();
+            var gdiFrame = _gdi.AcquireNextFrame();
+            if (gdiFrame != null) return gdiFrame;
         }
 
         return null;

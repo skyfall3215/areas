@@ -358,6 +358,8 @@ public sealed class SecondScreenServer : IDisposable
                 bool sawFirstNewDxgiFrame = false;
                 byte[] testPatternBgra = new byte[streamWidth * streamHeight * 4];
 
+                byte[]? lastValidBgra = null;
+
                 while (!sessionCts.Token.IsCancellationRequested)
                 {
                     long frameStartTicks = stopwatch.ElapsedTicks;
@@ -388,19 +390,33 @@ public sealed class SecondScreenServer : IDisposable
                         if (frame != null && frame.RgbaData != null && frame.RgbaData.Length >= streamWidth * streamHeight * 4)
                         {
                             bgraData = frame.RgbaData;
+                            lastValidBgra = bgraData;
                             // When DWM finishes painting the newly extended virtual desktop for the first time,
-                            // force an immediate IDR keyframe so the tablet instantly displays the sharp desktop!
+                            // or after returning from UAC prompt, force an immediate IDR keyframe!
                             if (frame.IsNew && !sawFirstNewDxgiFrame)
                             {
                                 sawFirstNewDxgiFrame = true;
                                 encoder.RequestKeyframe();
                             }
                         }
+                        else if (lastValidBgra != null)
+                        {
+                            // During UAC desktop switch or temporary DXGI re-attach, freeze on last known valid desktop frame
+                            // instead of generating an animated test pattern!
+                            bgraData = lastValidBgra;
+                            sawFirstNewDxgiFrame = false; // Trigger keyframe once DXGI re-attaches
+                        }
                         else
                         {
                             GenerateTestPattern(testPatternBgra, streamWidth, streamHeight, frameNumber);
                             bgraData = testPatternBgra;
                         }
+                    }
+                    else if (lastValidBgra != null)
+                    {
+                        bgraData = lastValidBgra;
+                        sawFirstNewDxgiFrame = false;
+                        captureDurationUs = 500;
                     }
                     else
                     {
