@@ -52,7 +52,7 @@
                     android:paddingTop="2dp"
                     android:paddingEnd="8dp"
                     android:paddingBottom="2dp"
-                    android:text="v1.0.2"
+                    android:text="v1.0.3"
                     android:textColor="#A78BFA"
                     android:textSize="11sp"
                     android:textStyle="bold" />
