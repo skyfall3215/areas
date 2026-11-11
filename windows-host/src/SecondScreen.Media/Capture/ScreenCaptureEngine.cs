@@ -14,21 +14,18 @@ public sealed class ScreenCaptureEngine : IDisposable
 
     public bool Initialize(string? targetDeviceName, Rectangle targetBounds)
     {
-        // 1. High-performance GDI capture first (bulletproof across hybrid GPUs, virtual screens, IddCx, and renders software cursor)
-        if (_gdi.Initialize(targetBounds, targetDeviceName))
-        {
-            _useGdi = true;
-            Console.WriteLine($"[ScreenCapture] Yüksek Hızlı GDI Yakalama devrede: {targetBounds.X},{targetBounds.Y} {targetBounds.Width}x{targetBounds.Height}");
-            return true;
-        }
+        GdiScreenCapture.EnsureThreadDesktopAttached();
 
-        // 2. DXGI hardware capture fallback
+        // 1. Hardware DXGI Output Duplication first (~0.05-1.5 ms capture latency, works on IddCx virtual displays and hybrid GPUs, with native cursor overlay)
         if (!string.IsNullOrEmpty(targetDeviceName))
         {
             try
             {
                 if (_dxgi.Initialize(targetDeviceName))
                 {
+                    // Prime initial desktop frame so immediate 0ms queries succeed
+                    _dxgi.AcquireNextFrame(50);
+                    _dxgi.AcquireNextFrame(50);
                     _useGdi = false;
                     Console.WriteLine($"[ScreenCapture] Donanımsal DXGI Yakalama devrede: {targetDeviceName} ({_dxgi.Width}x{_dxgi.Height})");
                     return true;
@@ -38,6 +35,14 @@ public sealed class ScreenCaptureEngine : IDisposable
             {
                 Console.WriteLine($"[ScreenCapture] DXGI denenirken istisna: {ex.Message}");
             }
+        }
+
+        // 2. GDI capture fallback
+        if (_gdi.Initialize(targetBounds, targetDeviceName))
+        {
+            _useGdi = true;
+            Console.WriteLine($"[ScreenCapture] GDI Yakalama devrede: {targetBounds.X},{targetBounds.Y} {targetBounds.Width}x{targetBounds.Height}");
+            return true;
         }
 
         return false;

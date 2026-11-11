@@ -19,6 +19,10 @@ public sealed class MfH264Encoder : IDisposable
     private ICodecAPI? _codecApi;
     private IMFMediaType? _inType;
     private IMFMediaType? _outType;
+    private IMFMediaBuffer? _reusableInBuffer;
+    private IMFSample? _reusableInSample;
+    private IMFMediaBuffer? _reusableOutBuffer;
+    private IMFSample? _reusableOutSample;
     private int _width;
     private int _height;
     private int _fps;
@@ -98,13 +102,15 @@ public sealed class MfH264Encoder : IDisposable
                     _codecApi = codecApi;
                     CodecApiGuids.TrySet(_codecApi, CodecApiGuids.LowLatencyMode, true);
                     CodecApiGuids.TrySet(_codecApi, CodecApiGuids.DefaultBPictureCount, (uint)0); // NO B-FRAMES
+                    CodecApiGuids.TrySet(_codecApi, CodecApiGuids.QualityVsSpeed, (uint)0); // 0 = Fastest encoding speed (ultra-low latency)
+                    CodecApiGuids.TrySet(_codecApi, CodecApiGuids.NumWorkerThreads, (uint)Math.Clamp(Environment.ProcessorCount, 4, 16));
                     CodecApiGuids.TrySet(_codecApi, CodecApiGuids.RateControlMode, (uint)0); // CBR
                     CodecApiGuids.TrySet(_codecApi, CodecApiGuids.MeanBitRate, (uint)_bitrateBps);
                     CodecApiGuids.TrySet(_codecApi, CodecApiGuids.MaxBitRate, (uint)(_bitrateBps * 12 / 10));
                     uint bufSize = (uint)(_bitrateBps / 8 / _fps * 2);
                     CodecApiGuids.TrySet(_codecApi, CodecApiGuids.BufferSize, bufSize);
                     CodecApiGuids.TrySet(_codecApi, CodecApiGuids.AdaptiveMode, (uint)0);
-                    CodecApiGuids.TrySet(_codecApi, CodecApiGuids.GopSize, (uint)60); // 1 keyframe per second
+                    CodecApiGuids.TrySet(_codecApi, CodecApiGuids.GopSize, (uint)120); // 1 keyframe every 2 seconds (prevents 1Hz keyframe spikes)
                 }
             }
         }
@@ -135,6 +141,16 @@ public sealed class MfH264Encoder : IDisposable
 
         _outputStreamInfo = _encoder.GetOutputStreamInfo(0);
         _requestKeyframe = true;
+
+        // Pre-allocate reusable MF buffers and samples to avoid native allocation overhead on every frame
+        _reusableInBuffer = MediaFactory.MFCreateMemoryBuffer(_nv12Size);
+        _reusableInSample = MediaFactory.MFCreateSample();
+        _reusableInSample.AddBuffer(_reusableInBuffer);
+
+        int outBufferSize = _outputStreamInfo.Size > 0 ? _outputStreamInfo.Size : 1024 * 1024;
+        _reusableOutBuffer = MediaFactory.MFCreateMemoryBuffer(outBufferSize);
+        _reusableOutSample = MediaFactory.MFCreateSample();
+        _reusableOutSample.AddBuffer(_reusableOutBuffer);
     }
 
     public void RequestKeyframe()
@@ -142,25 +158,26 @@ public sealed class MfH264Encoder : IDisposable
         _requestKeyframe = true;
     }
 
-    public EncodedPacket? EncodeBgraFrame(ReadOnlySpan<byte> bgra, long timestampUs)
+    public unsafe EncodedPacket? EncodeBgraFrame(ReadOnlySpan<byte> bgra, long timestampUs)
     {
-        if (_encoder == null || _nv12Buffer == null)
+        if (_encoder == null || _nv12Buffer == null || _reusableInBuffer == null || _reusableInSample == null || _reusableOutBuffer == null || _reusableOutSample == null)
             return null;
 
-        // Convert BGRA to NV12
-        ColorConverter.BgraToNv12(bgra, _nv12Buffer, _width, _height);
+        // Convert BGRA directly into the locked MF input buffer (zero intermediate copy)
+        _reusableInBuffer.Lock(out IntPtr pData, out _, out _);
+        try
+        {
+            var dstSpan = new Span<byte>(pData.ToPointer(), _nv12Size);
+            ColorConverter.BgraToNv12(bgra, dstSpan, _width, _height);
+        }
+        finally
+        {
+            _reusableInBuffer.Unlock();
+        }
+        _reusableInBuffer.CurrentLength = _nv12Size;
 
-        // Create MF input buffer
-        using var inBuffer = MediaFactory.MFCreateMemoryBuffer(_nv12Size);
-        inBuffer.Lock(out IntPtr pData, out _, out _);
-        Marshal.Copy(_nv12Buffer, 0, pData, _nv12Size);
-        inBuffer.Unlock();
-        inBuffer.CurrentLength = _nv12Size;
-
-        using var inSample = MediaFactory.MFCreateSample();
-        inSample.AddBuffer(inBuffer);
-        inSample.SampleTime = timestampUs * 10; // convert us to 100ns units
-        inSample.SampleDuration = (10_000_000 / _fps);
+        _reusableInSample.SampleTime = timestampUs * 10; // convert us to 100ns units
+        _reusableInSample.SampleDuration = (10_000_000 / _fps);
 
         if (_requestKeyframe)
         {
@@ -172,18 +189,14 @@ public sealed class MfH264Encoder : IDisposable
             _requestKeyframe = false;
         }
 
-        _encoder.ProcessInput(0, inSample, 0);
+        _encoder.ProcessInput(0, _reusableInSample, 0);
 
         // Retrieve output sample
-        int outBufferSize = _outputStreamInfo.Size > 0 ? _outputStreamInfo.Size : 1024 * 1024;
-        using var outBuffer = MediaFactory.MFCreateMemoryBuffer(outBufferSize);
-        using var outSample = MediaFactory.MFCreateSample();
-        outSample.AddBuffer(outBuffer);
-
+        _reusableOutBuffer.CurrentLength = 0;
         var outputData = new OutputDataBuffer
         {
             StreamID = 0,
-            Sample = outSample
+            Sample = _reusableOutSample
         };
 
         var result = _encoder.ProcessOutput(ProcessOutputFlags.None, 1, ref outputData, out _);
@@ -302,6 +315,14 @@ public sealed class MfH264Encoder : IDisposable
                 _encoder = null;
             }
             _codecApi = null;
+            _reusableInSample?.Dispose();
+            _reusableInSample = null;
+            _reusableInBuffer?.Dispose();
+            _reusableInBuffer = null;
+            _reusableOutSample?.Dispose();
+            _reusableOutSample = null;
+            _reusableOutBuffer?.Dispose();
+            _reusableOutBuffer = null;
             _inType?.Dispose();
             _inType = null;
             _outType?.Dispose();

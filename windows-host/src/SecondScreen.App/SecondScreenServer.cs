@@ -303,9 +303,9 @@ public sealed class SecondScreenServer : IDisposable
             catch { }
         }, sessionCts.Token);
 
-        // 8. Decoupled video sender
+        // 8. Decoupled video sender (small capacity = zero bufferbloat, ultra-low latency)
         var videoChannel = Channel.CreateBounded<(FrameHeader Header, byte[] Payload)>(
-            new BoundedChannelOptions(16)
+            new BoundedChannelOptions(8)
             {
                 FullMode = BoundedChannelFullMode.Wait,
                 SingleReader = true,
@@ -347,13 +347,19 @@ public sealed class SecondScreenServer : IDisposable
 
                 long targetFrameIntervalTicks = Stopwatch.Frequency / targetFps;
                 var stopwatch = Stopwatch.StartNew();
+                long nextTargetTicks = stopwatch.ElapsedTicks;
                 bool configSent = false;
                 byte[] testPatternBgra = new byte[streamWidth * streamHeight * 4];
 
                 while (!sessionCts.Token.IsCancellationRequested)
                 {
                     long frameStartTicks = stopwatch.ElapsedTicks;
-                    long nextTargetTicks = frameStartTicks + targetFrameIntervalTicks;
+                    nextTargetTicks += targetFrameIntervalTicks;
+                    if (nextTargetTicks < frameStartTicks)
+                    {
+                        // Reset target if a single frame took slightly longer than 16.6ms so we don't burst
+                        nextTargetTicks = frameStartTicks + targetFrameIntervalTicks;
+                    }
                     long frameStartUs = (frameStartTicks * 1_000_000) / Stopwatch.Frequency;
 
                     if (Interlocked.Exchange(ref requestKeyframeFlag, 0) == 1)
@@ -407,7 +413,7 @@ public sealed class SecondScreenServer : IDisposable
                             configSent = true;
                         }
 
-                        if (videoChannel.Reader.Count < 6)
+                        if (videoChannel.Reader.Count < 2)
                         {
                             sentFrameCount = ++frameNumber;
                             var frameMsg = new VideoFrameMessage(
@@ -431,6 +437,7 @@ public sealed class SecondScreenServer : IDisposable
                         }
                         else
                         {
+                            // Network sender is temporarily behind; drop stale frame and request fresh IDR so decoder stays in sync
                             encoder.RequestKeyframe();
                         }
                     }

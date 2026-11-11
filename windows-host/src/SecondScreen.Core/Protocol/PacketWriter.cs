@@ -27,7 +27,6 @@ public static class PacketWriter
         }
 
         await stream.WriteAsync(buffer, cancellationToken).ConfigureAwait(false);
-        await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
     }
 }
 

@@ -37,7 +37,9 @@ class VideoDecoder(private val surface: Surface) : AutoCloseable {
             val format = MediaFormat.createVideoFormat(MIME_TYPE, width, height)
             format.setByteBuffer("csd-0", ByteBuffer.wrap(spsPpsData))
 
-            // Low-Latency Flags
+            // Low-Latency & Max-Operating-Rate Flags
+            format.setInteger(MediaFormat.KEY_PRIORITY, 0) // Realtime priority
+            format.setInteger(MediaFormat.KEY_OPERATING_RATE, Int.MAX_VALUE) // Boost hardware decoder clock
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
             }
@@ -46,6 +48,9 @@ class VideoDecoder(private val surface: Surface) : AutoCloseable {
             } catch (_: Exception) {}
             try {
                 format.setInteger("vendor.rtc-ext-dec-low-latency.enable", 1)
+            } catch (_: Exception) {}
+            try {
+                format.setInteger("vendor.sec-dec-ext-low-latency.enable", 1) // Samsung Exynos low-latency
             } catch (_: Exception) {}
 
             val decoder = MediaCodec.createDecoderByType(MIME_TYPE)
@@ -98,8 +103,8 @@ class VideoDecoder(private val surface: Surface) : AutoCloseable {
                 return false
             }
 
-            // Drain output after queuing for immediate low-latency render
-            outIndex = decoder.dequeueOutputBuffer(bufferInfo, 0)
+            // Wait up to 2.5ms for immediate hardware decode output so the current frame is rendered right away
+            outIndex = decoder.dequeueOutputBuffer(bufferInfo, 2_500)
             while (outIndex >= 0) {
                 decoder.releaseOutputBuffer(outIndex, true)
                 outIndex = decoder.dequeueOutputBuffer(bufferInfo, 0)

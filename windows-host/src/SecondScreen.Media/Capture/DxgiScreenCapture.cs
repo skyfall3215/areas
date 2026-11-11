@@ -22,6 +22,8 @@ public sealed class DxgiScreenCapture : IDisposable
     private ID3D11Texture2D? _stagingTexture;
     private int _width;
     private int _height;
+    private int _originX;
+    private int _originY;
     private byte[]? _reusableRgbaData;
     private bool _hasValidFrame;
     private long _lastPresentTimeUs;
@@ -36,6 +38,8 @@ public sealed class DxgiScreenCapture : IDisposable
         Dispose();
         _isDisposed = false;
         _hasValidFrame = false;
+
+        GdiScreenCapture.EnsureThreadDesktopAttached();
 
         using var factory = DXGI.CreateDXGIFactory1<IDXGIFactory1>();
         if (factory == null) return false;
@@ -117,10 +121,12 @@ public sealed class DxgiScreenCapture : IDisposable
                             _device = device;
                             _context = context;
                             _duplication = duplication;
-                            _width = outDesc.DesktopCoordinates.Right - outDesc.DesktopCoordinates.Left;
-                            _height = outDesc.DesktopCoordinates.Bottom - outDesc.DesktopCoordinates.Top;
+                            _originX = outDesc.DesktopCoordinates.Left;
+                            _originY = outDesc.DesktopCoordinates.Top;
+                            _width = (outDesc.DesktopCoordinates.Right - outDesc.DesktopCoordinates.Left) & ~1;
+                            _height = (outDesc.DesktopCoordinates.Bottom - outDesc.DesktopCoordinates.Top) & ~1;
 
-                            Console.WriteLine($"[DxgiScreenCapture] Başarıyla yakalandı: {devName} ({_width}x{_height}) [{desc.Description}]");
+                            Console.WriteLine($"[DxgiScreenCapture] Başarıyla yakalandı: {devName} ({_width}x{_height} @ {_originX},{_originY}) [{desc.Description}]");
 
                             // Pre-allocate zero-GC reusable pixel buffer
                             _reusableRgbaData = new byte[_width * _height * 4];
@@ -156,10 +162,14 @@ public sealed class DxgiScreenCapture : IDisposable
         return false;
     }
 
+    private byte[]? _cleanDesktopRgba;
+
     public CapturedFrame? AcquireNextFrame(int timeoutMs = 0)
     {
         if (_duplication == null || _context == null || _stagingTexture == null || _reusableRgbaData == null)
             return null;
+
+        _cleanDesktopRgba ??= new byte[_width * _height * 4];
 
         var result = _duplication.AcquireNextFrame(
             (uint)timeoutMs,
@@ -168,9 +178,10 @@ public sealed class DxgiScreenCapture : IDisposable
 
         if (result == DxgiResultCode.WaitTimeout)
         {
-            // If screen didn't change this tick, reuse previous frame to keep 60 FPS constant
             if (_hasValidFrame)
             {
+                RestoreLastCursorPatch();
+                GdiScreenCapture.DrawCursorOntoBgraBuffer(_reusableRgbaData, _width, _height, _originX, _originY, out _lastCursorRect);
                 return new CapturedFrame
                 {
                     RgbaData = _reusableRgbaData,
@@ -189,9 +200,13 @@ public sealed class DxgiScreenCapture : IDisposable
             {
                 Initialize();
             }
-            return _hasValidFrame
-                ? new CapturedFrame { RgbaData = _reusableRgbaData, Width = _width, Height = _height, TimestampUs = _lastPresentTimeUs, IsNew = false }
-                : null;
+            if (_hasValidFrame)
+            {
+                RestoreLastCursorPatch();
+                GdiScreenCapture.DrawCursorOntoBgraBuffer(_reusableRgbaData, _width, _height, _originX, _originY, out _lastCursorRect);
+                return new CapturedFrame { RgbaData = _reusableRgbaData, Width = _width, Height = _height, TimestampUs = _lastPresentTimeUs, IsNew = false };
+            }
+            return null;
         }
 
         using (desktopResource)
@@ -201,6 +216,22 @@ public sealed class DxgiScreenCapture : IDisposable
             {
                 _duplication.ReleaseFrame();
                 return null;
+            }
+
+            // If only mouse updated and no desktop pixels accumulated since last frame, skip full GPU readback!
+            if (_hasValidFrame && frameInfo.LastPresentTime == 0 && frameInfo.AccumulatedFrames == 0)
+            {
+                _duplication.ReleaseFrame();
+                RestoreLastCursorPatch();
+                GdiScreenCapture.DrawCursorOntoBgraBuffer(_reusableRgbaData, _width, _height, _originX, _originY, out _lastCursorRect);
+                return new CapturedFrame
+                {
+                    RgbaData = _reusableRgbaData,
+                    Width = _width,
+                    Height = _height,
+                    TimestampUs = _lastPresentTimeUs,
+                    IsNew = false
+                };
             }
 
             _context.CopyResource(_stagingTexture, desktopTexture);
@@ -216,25 +247,28 @@ public sealed class DxgiScreenCapture : IDisposable
                 unsafe
                 {
                     byte* srcPtr = (byte*)mapped.DataPointer.ToPointer();
-                    fixed (byte* dstPtr = _reusableRgbaData)
+                    fixed (byte* dstClean = _cleanDesktopRgba)
+                    fixed (byte* dstWork = _reusableRgbaData)
                     {
                         if (rowPitch == rowBytes)
                         {
-                            Buffer.MemoryCopy(srcPtr, dstPtr, totalBytes, totalBytes);
+                            Buffer.MemoryCopy(srcPtr, dstClean, totalBytes, totalBytes);
+                            Buffer.MemoryCopy(srcPtr, dstWork, totalBytes, totalBytes);
                         }
                         else
                         {
                             for (int y = 0; y < _height; y++)
                             {
-                                Buffer.MemoryCopy(
-                                    srcPtr + (y * rowPitch),
-                                    dstPtr + (y * rowBytes),
-                                    rowBytes,
-                                    rowBytes);
+                                byte* sRow = srcPtr + (y * rowPitch);
+                                int dOff = y * rowBytes;
+                                Buffer.MemoryCopy(sRow, dstClean + dOff, rowBytes, rowBytes);
+                                Buffer.MemoryCopy(sRow, dstWork + dOff, rowBytes, rowBytes);
                             }
                         }
                     }
                 }
+
+                GdiScreenCapture.DrawCursorOntoBgraBuffer(_reusableRgbaData, _width, _height, _originX, _originY, out _lastCursorRect);
 
                 _hasValidFrame = true;
                 _lastPresentTimeUs = (long)(frameInfo.LastPresentTime / 10);
@@ -253,6 +287,26 @@ public sealed class DxgiScreenCapture : IDisposable
                 _context.Unmap(_stagingTexture, 0);
             }
         }
+    }
+
+    private System.Drawing.Rectangle _lastCursorRect;
+
+    private unsafe void RestoreLastCursorPatch()
+    {
+        if (_cleanDesktopRgba == null || _reusableRgbaData == null) return;
+        var r = _lastCursorRect;
+        if (r.Width <= 0 || r.Height <= 0) return;
+
+        fixed (byte* pClean = _cleanDesktopRgba)
+        fixed (byte* pWork = _reusableRgbaData)
+        {
+            for (int row = 0; row < r.Height; row++)
+            {
+                int offset = ((r.Y + row) * _width + r.X) * 4;
+                Buffer.MemoryCopy(pClean + offset, pWork + offset, r.Width * 4, r.Width * 4);
+            }
+        }
+        _lastCursorRect = default;
     }
 
     public void Dispose()

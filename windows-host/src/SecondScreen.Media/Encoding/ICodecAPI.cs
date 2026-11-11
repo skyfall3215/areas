@@ -73,6 +73,12 @@ public static class CodecApiGuids
     // CODECAPI_AVEncAdaptiveMode: VT_UI4 (0 = None)
     public static readonly Guid AdaptiveMode = new("31637042-45e0-47b7-b08e-595304620021");
 
+    // CODECAPI_AVEncCommonQualityVsSpeed: VT_UI4 (0 = Fastest / Lowest CPU, 100 = Slowest / Highest Quality)
+    public static readonly Guid QualityVsSpeed = new("98332df8-03cd-476b-89fa-3f9e442dec9f");
+
+    // CODECAPI_AVEncNumWorkerThreads: VT_UI4
+    public static readonly Guid NumWorkerThreads = new("b0c8bf60-16f7-4951-a30b-1b1609992b36");
+
     // CODECAPI_AVEncMPVGOPSize: VT_UI4 (Keyframe interval)
     public static readonly Guid GopSize = new("95f42fac-4e81-4234-a403-6a9d5970c810");
 
