@@ -29,6 +29,7 @@ publish/
 release/
 .docs/
 docs/
+protocol/
 install-virtual-driver.cmd
 run-host.ps1
 *.cmd
