@@ -114,8 +114,15 @@ public sealed class Win32TouchInjector : ITouchInjector
     private const uint MOUSEEVENTF_ABSOLUTE = 0x8000;
 
     [DllImport("user32.dll")]
+    private static extern bool GetCursorPos(out POINT lpPoint);
+
+    [DllImport("user32.dll")]
     private static extern int GetSystemMetrics(int nIndex);
 
+    private const int SM_XVIRTUALSCREEN = 76;
+    private const int SM_YVIRTUALSCREEN = 77;
+    private const int SM_CXVIRTUALSCREEN = 78;
+    private const int SM_CYVIRTUALSCREEN = 79;
     private const int SM_CXSCREEN = 0;
     private const int SM_CYSCREEN = 1;
 
@@ -180,38 +187,64 @@ public sealed class Win32TouchInjector : ITouchInjector
 
     public bool InjectTouch(TouchEventMessage touchEvent)
     {
-        if (!_isInitialized)
-        {
-            if (!Initialize(_maxPointers))
-                return false;
-        }
-
         if (touchEvent.PointerCount == 0 || touchEvent.Pointers.Length == 0)
             return false;
 
         lock (_lock)
         {
             var primary = touchEvent.Pointers[0];
-            if (primary.Action is TouchAction.LeftClick or TouchAction.RightClick or TouchAction.Scroll)
+
+            // 1. Relative Mouse Move (Moonlight Style Touchpad Drag)
+            if (primary.Action == TouchAction.MouseMoveRel)
+            {
+                short dx = (short)primary.NormalizedX;
+                short dy = (short)primary.NormalizedY;
+                GetCursorPos(out var curPos);
+                SetCursorPos(curPos.x + dx, curPos.y + dy);
+                return true;
+            }
+
+            // 2. 2D Scrolling (Moonlight 2-Finger Horizontal & Vertical Scroll)
+            if (primary.Action == TouchAction.Scroll2D)
+            {
+                short scrollX = (short)primary.NormalizedX;
+                short scrollY = (short)primary.NormalizedY;
+                if (scrollY != 0)
+                {
+                    mouse_event(MOUSEEVENTF_WHEEL, 0, 0, (uint)(int)scrollY, 0);
+                }
+                if (scrollX != 0)
+                {
+                    const uint MOUSEEVENTF_HWHEEL = 0x01000;
+                    mouse_event(MOUSEEVENTF_HWHEEL, 0, 0, (uint)(int)scrollX, 0);
+                }
+                return true;
+            }
+
+            // 3. Clicks (LeftClick, RightClick, DoubleClick, Legacy Scroll)
+            if (primary.Action is TouchAction.LeftClick or TouchAction.RightClick or TouchAction.DoubleClick or TouchAction.Scroll)
             {
                 var pixel = TouchCoordinateMapper.NormalizeToScreen(primary.NormalizedX, primary.NormalizedY, _screenBounds);
                 SetCursorPos(pixel.X, pixel.Y);
 
-                uint normX = (uint)Math.Clamp((int)Math.Round((pixel.X - _screenBounds.Left) * 65535.0 / Math.Max(1, _screenBounds.Width - 1)), 0, 65535);
-                uint normY = (uint)Math.Clamp((int)Math.Round((pixel.Y - _screenBounds.Top) * 65535.0 / Math.Max(1, _screenBounds.Height - 1)), 0, 65535);
-
                 switch (primary.Action)
                 {
                     case TouchAction.LeftClick:
-                        mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | MOUSEEVENTF_LEFTDOWN, normX, normY, 0, 0);
-                        mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | MOUSEEVENTF_LEFTUP, normX, normY, 0, 0);
+                        mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
+                        mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
                         break;
                     case TouchAction.RightClick:
-                        mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | MOUSEEVENTF_RIGHTDOWN, normX, normY, 0, 0);
-                        mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | MOUSEEVENTF_RIGHTUP, normX, normY, 0, 0);
+                        mouse_event(MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, 0);
+                        mouse_event(MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0);
+                        break;
+                    case TouchAction.DoubleClick:
+                        mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
+                        mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
+                        System.Threading.Thread.Sleep(30);
+                        mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
+                        mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
                         break;
                     case TouchAction.Scroll:
-                        // Scroll delta passed via NormalizedY as signed 16-bit
                         short scrollDelta = (short)primary.NormalizedY;
                         mouse_event(MOUSEEVENTF_WHEEL, 0, 0, (uint)(int)scrollDelta, 0);
                         break;
@@ -219,119 +252,33 @@ public sealed class Win32TouchInjector : ITouchInjector
                 return true;
             }
 
-            int count = Math.Min((int)touchEvent.PointerCount, touchEvent.Pointers.Length);
-            var contacts = new POINTER_TOUCH_INFO[count];
-
-            for (int i = 0; i < count; i++)
-            {
-                var p = touchEvent.Pointers[i];
-                var pixel = TouchCoordinateMapper.NormalizeToScreen(p.NormalizedX, p.NormalizedY, _screenBounds);
-
-                uint flags = (uint)PointerFlags.INRANGE;
-                int radius = p.ContactRadius > 0 ? p.ContactRadius : 10;
-
-                switch (p.Action)
-                {
-                    case TouchAction.Down:
-                        flags = (uint)(PointerFlags.DOWN | PointerFlags.INRANGE | PointerFlags.INCONTACT);
-                        _activePointers[p.PointerId] = (pixel.X, pixel.Y);
-                        break;
-
-                    case TouchAction.Move:
-                        flags = (uint)(PointerFlags.UPDATE | PointerFlags.INRANGE | PointerFlags.INCONTACT);
-                        _activePointers[p.PointerId] = (pixel.X, pixel.Y);
-                        break;
-
-                    case TouchAction.Up:
-                        flags = (uint)PointerFlags.UP;
-                        _activePointers.Remove(p.PointerId);
-                        break;
-
-                    case TouchAction.Cancel:
-                        flags = (uint)(PointerFlags.UP | PointerFlags.CANCELED);
-                        _activePointers.Remove(p.PointerId);
-                        break;
-                }
-
-                var rect = new RECT
-                {
-                    left = pixel.X - radius,
-                    top = pixel.Y - radius,
-                    right = pixel.X + radius,
-                    bottom = pixel.Y + radius
-                };
-
-                contacts[i] = new POINTER_TOUCH_INFO
-                {
-                    pointerInfo = new POINTER_INFO
-                    {
-                        pointerType = PT_TOUCH,
-                        pointerId = p.PointerId,
-                        pointerFlags = flags,
-                        ptPixelLocation = new POINT { x = pixel.X, y = pixel.Y },
-                        ptPixelLocationRaw = new POINT { x = pixel.X, y = pixel.Y }
-                    },
-                    touchMask = TOUCH_MASK_CONTACTAREA | 0x00000004 /* PRESSURE */,
-                    rcContact = rect,
-                    rcContactRaw = rect,
-                    orientation = 90,
-                    pressure = 32000
-                };
-            }
-
-            bool injected = false;
-            try
-            {
-                injected = InjectTouchInput((uint)contacts.Length, contacts);
-            }
-            catch { }
-
-            if (injected)
-            {
-                return true;
-            }
-
-            // Fallback: Windows mouse emulation (works on all Windows systems without elevated UIPI or digitizer drivers)
+            // Fallback & direct touch / drag: use SetCursorPos + mouse_event directly
+            // This guarantees the cursor moves to the exact second-monitor pixel location
+            // without being constrained to primary monitor coords.
             try
             {
                 primary = touchEvent.Pointers[0];
                 var pixel = TouchCoordinateMapper.NormalizeToScreen(primary.NormalizedX, primary.NormalizedY, _screenBounds);
                 SetCursorPos(pixel.X, pixel.Y);
 
-                uint normX = (uint)Math.Clamp((int)Math.Round((pixel.X - _screenBounds.Left) * 65535.0 / Math.Max(1, _screenBounds.Width - 1)), 0, 65535);
-                uint normY = (uint)Math.Clamp((int)Math.Round((pixel.Y - _screenBounds.Top) * 65535.0 / Math.Max(1, _screenBounds.Height - 1)), 0, 65535);
-
                 switch (primary.Action)
                 {
                     case TouchAction.Down:
-                        mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | MOUSEEVENTF_LEFTDOWN, normX, normY, 0, 0);
+                        mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
                         break;
                     case TouchAction.Move:
-                        mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE, normX, normY, 0, 0);
+                        // SetCursorPos already moved the cursor to the exact pixel on screen 2
                         break;
                     case TouchAction.Up:
                     case TouchAction.Cancel:
-                        mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | MOUSEEVENTF_LEFTUP, normX, normY, 0, 0);
-                        break;
-                    case TouchAction.LeftClick:
-                        mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | MOUSEEVENTF_LEFTDOWN, normX, normY, 0, 0);
-                        mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | MOUSEEVENTF_LEFTUP, normX, normY, 0, 0);
-                        break;
-                    case TouchAction.RightClick:
-                        mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | MOUSEEVENTF_RIGHTDOWN, normX, normY, 0, 0);
-                        mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE | MOUSEEVENTF_RIGHTUP, normX, normY, 0, 0);
-                        break;
-                    case TouchAction.Scroll:
-                        // Scroll delta passed via NormalizedY as signed 16-bit
-                        short scrollDelta = (short)primary.NormalizedY;
-                        mouse_event(MOUSEEVENTF_WHEEL, 0, 0, (uint)(int)scrollDelta, 0);
+                        mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
                         break;
                 }
                 return true;
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[Win32TouchInjector] Mouse fallback exception: {ex.Message}");
+                Console.WriteLine($"[Win32TouchInjector] Mouse injection exception: {ex.Message}");
                 return false;
             }
         }

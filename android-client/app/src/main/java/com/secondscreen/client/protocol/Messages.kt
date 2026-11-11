@@ -251,6 +251,9 @@ object TouchAction {
     const val SCROLL: Byte = 0x05     // Wheel scroll (NormalizedY contains scroll delta)
     const val RIGHT_CLICK: Byte = 0x06 // Long-press or 2-finger tap right click
     const val LEFT_CLICK: Byte = 0x07  // Single tap left click
+    const val DOUBLE_CLICK: Byte = 0x08 // Two-finger tap double click
+    const val MOUSE_MOVE_REL: Byte = 0x09 // Trackpad relative cursor move (dx, dy)
+    const val SCROLL_2D: Byte = 0x0A    // 2D Wheel scroll (dx, dy)
 }
 
 data class PointerEntry(

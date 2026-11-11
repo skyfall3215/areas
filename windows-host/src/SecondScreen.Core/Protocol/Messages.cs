@@ -279,6 +279,9 @@ public static class TouchAction
     public const byte Scroll = 0x05;     // Wheel scroll (NormalizedY contains scroll delta)
     public const byte RightClick = 0x06; // Right click tap
     public const byte LeftClick = 0x07;  // Single tap click
+    public const byte DoubleClick = 0x08; // Double tap click
+    public const byte MouseMoveRel = 0x09; // Trackpad relative cursor move (NormalizedX/Y = signed delta)
+    public const byte Scroll2D = 0x0A;    // 2D Wheel scroll (NormalizedX = deltaX, NormalizedY = deltaY)
 }
 
 public readonly record struct PointerEntry(
