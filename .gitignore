@@ -28,6 +28,7 @@ node_modules/
 publish/
 release/
 .docs/
+docs/
 install-virtual-driver.cmd
 run-host.ps1
 *.cmd
