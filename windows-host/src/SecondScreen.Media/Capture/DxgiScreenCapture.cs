@@ -20,12 +20,15 @@ public sealed class DxgiScreenCapture : IDisposable
     private ID3D11DeviceContext? _context;
     private IDXGIOutputDuplication? _duplication;
     private ID3D11Texture2D? _stagingTexture;
+    private string? _targetDeviceName;
+    private int _outputIndex;
     private int _width;
     private int _height;
     private int _originX;
     private int _originY;
     private byte[]? _reusableRgbaData;
-    private bool _hasValidFrame;
+    private bool _hasAnySurface;
+    private bool _hasVisibleDesktop;
     private long _lastPresentTimeUs;
     private bool _isDisposed;
 
@@ -35,9 +38,13 @@ public sealed class DxgiScreenCapture : IDisposable
 
     public bool Initialize(string? targetDeviceName = null, int outputIndex = 0)
     {
+        bool hadAnySurface = _hasAnySurface;
         Dispose();
         _isDisposed = false;
-        _hasValidFrame = false;
+        _hasAnySurface = hadAnySurface && _reusableRgbaData != null;
+        _hasVisibleDesktop = false;
+        _targetDeviceName = targetDeviceName;
+        _outputIndex = outputIndex;
 
         GdiScreenCapture.EnsureThreadDesktopAttached();
 
@@ -128,8 +135,14 @@ public sealed class DxgiScreenCapture : IDisposable
 
                             Console.WriteLine($"[DxgiScreenCapture] Başarıyla yakalandı: {devName} ({_width}x{_height} @ {_originX},{_originY}) [{desc.Description}]");
 
-                            // Pre-allocate zero-GC reusable pixel buffer
-                            _reusableRgbaData = new byte[_width * _height * 4];
+                            // Pre-allocate zero-GC reusable pixel buffer (preserve if same size during AccessLost recovery)
+                            int requiredBytes = _width * _height * 4;
+                            if (_reusableRgbaData == null || _reusableRgbaData.Length != requiredBytes)
+                            {
+                                _reusableRgbaData = new byte[requiredBytes];
+                                _cleanDesktopRgba = new byte[requiredBytes];
+                                _hasAnySurface = false;
+                            }
 
                             // Create staging texture for CPU readback
                             var textureDesc = new Texture2DDescription
@@ -178,7 +191,7 @@ public sealed class DxgiScreenCapture : IDisposable
 
         if (result == DxgiResultCode.WaitTimeout)
         {
-            if (_hasValidFrame)
+            if (_hasAnySurface)
             {
                 RestoreLastCursorPatch();
                 GdiScreenCapture.DrawCursorOntoBgraBuffer(_reusableRgbaData, _width, _height, _originX, _originY, out _lastCursorRect);
@@ -196,11 +209,17 @@ public sealed class DxgiScreenCapture : IDisposable
 
         if (result.Failure || desktopResource == null)
         {
-            if (result == DxgiResultCode.AccessLost || result == DxgiResultCode.AccessDenied)
+            if (result == DxgiResultCode.AccessLost ||
+                result == DxgiResultCode.AccessDenied ||
+                result == DxgiResultCode.InvalidCall)
             {
-                Initialize();
+                if (Initialize(_targetDeviceName, _outputIndex))
+                {
+                    // Immediately attempt one quick read on the re-created duplication session
+                    return AcquireNextFrame(16);
+                }
             }
-            if (_hasValidFrame)
+            if (_hasAnySurface && _reusableRgbaData != null)
             {
                 RestoreLastCursorPatch();
                 GdiScreenCapture.DrawCursorOntoBgraBuffer(_reusableRgbaData, _width, _height, _originX, _originY, out _lastCursorRect);
@@ -218,22 +237,6 @@ public sealed class DxgiScreenCapture : IDisposable
                 return null;
             }
 
-            // If only mouse updated and no desktop pixels accumulated since last frame, skip full GPU readback!
-            if (_hasValidFrame && frameInfo.LastPresentTime == 0 && frameInfo.AccumulatedFrames == 0)
-            {
-                _duplication.ReleaseFrame();
-                RestoreLastCursorPatch();
-                GdiScreenCapture.DrawCursorOntoBgraBuffer(_reusableRgbaData, _width, _height, _originX, _originY, out _lastCursorRect);
-                return new CapturedFrame
-                {
-                    RgbaData = _reusableRgbaData,
-                    Width = _width,
-                    Height = _height,
-                    TimestampUs = _lastPresentTimeUs,
-                    IsNew = false
-                };
-            }
-
             _context.CopyResource(_stagingTexture, desktopTexture);
             _duplication.ReleaseFrame();
 
@@ -243,10 +246,27 @@ public sealed class DxgiScreenCapture : IDisposable
                 int rowPitch = (int)mapped.RowPitch;
                 int rowBytes = _width * 4;
                 long totalBytes = (long)_width * _height * 4;
+                bool hasVisibleDesktopPixels = _hasVisibleDesktop;
 
                 unsafe
                 {
                     byte* srcPtr = (byte*)mapped.DataPointer.ToPointer();
+
+                    // Until the first non-blank DWM desktop frame arrives (e.g. during the ~1.5s ExtendDesktop transition),
+                    // check if the frame has visible desktop pixels so we know the exact moment DWM finishes painting.
+                    if (!hasVisibleDesktopPixels)
+                    {
+                        int stride = Math.Max(64, (int)(totalBytes / 4096) & ~3);
+                        for (long idx = 0; idx < totalBytes - 4; idx += stride)
+                        {
+                            if (srcPtr[idx] != 0 || srcPtr[idx + 1] != 0 || srcPtr[idx + 2] != 0)
+                            {
+                                hasVisibleDesktopPixels = true;
+                                break;
+                            }
+                        }
+                    }
+
                     fixed (byte* dstClean = _cleanDesktopRgba)
                     fixed (byte* dstWork = _reusableRgbaData)
                     {
@@ -270,7 +290,11 @@ public sealed class DxgiScreenCapture : IDisposable
 
                 GdiScreenCapture.DrawCursorOntoBgraBuffer(_reusableRgbaData, _width, _height, _originX, _originY, out _lastCursorRect);
 
-                _hasValidFrame = true;
+                _hasAnySurface = true;
+                if (hasVisibleDesktopPixels)
+                {
+                    _hasVisibleDesktop = true;
+                }
                 _lastPresentTimeUs = (long)(frameInfo.LastPresentTime / 10);
 
                 return new CapturedFrame
@@ -279,7 +303,7 @@ public sealed class DxgiScreenCapture : IDisposable
                     Width = _width,
                     Height = _height,
                     TimestampUs = _lastPresentTimeUs,
-                    IsNew = true
+                    IsNew = hasVisibleDesktopPixels
                 };
             }
             finally
@@ -322,7 +346,8 @@ public sealed class DxgiScreenCapture : IDisposable
             _context = null;
             _device?.Dispose();
             _device = null;
-            _hasValidFrame = false;
+            _hasAnySurface = false;
+            _hasVisibleDesktop = false;
         }
     }
 }

@@ -179,7 +179,13 @@ public sealed class SecondScreenServer : IDisposable
             {
                 Log("[+] Tablet bağlandı: Masaüstü otomatik olarak İkinci Ekran (Extend) moduna geçirildi.");
             }
-            await Task.Delay(500, sessionCts.Token);
+            // Wait up to 800ms for the secondary display to appear in Windows topology
+            for (int waitIdx = 0; waitIdx < 8; waitIdx++)
+            {
+                await Task.Delay(100, sessionCts.Token);
+                if (DisplayEnumerator.GetDisplays().Any(d => !d.IsPrimary))
+                    break;
+            }
         }
         catch { }
 
@@ -305,7 +311,7 @@ public sealed class SecondScreenServer : IDisposable
 
         // 8. Decoupled video sender (small capacity = zero bufferbloat, ultra-low latency)
         var videoChannel = Channel.CreateBounded<(FrameHeader Header, byte[] Payload)>(
-            new BoundedChannelOptions(8)
+            new BoundedChannelOptions(16)
             {
                 FullMode = BoundedChannelFullMode.Wait,
                 SingleReader = true,
@@ -349,6 +355,7 @@ public sealed class SecondScreenServer : IDisposable
                 var stopwatch = Stopwatch.StartNew();
                 long nextTargetTicks = stopwatch.ElapsedTicks;
                 bool configSent = false;
+                bool sawFirstNewDxgiFrame = false;
                 byte[] testPatternBgra = new byte[streamWidth * streamHeight * 4];
 
                 while (!sessionCts.Token.IsCancellationRequested)
@@ -362,7 +369,8 @@ public sealed class SecondScreenServer : IDisposable
                     }
                     long frameStartUs = (frameStartTicks * 1_000_000) / Stopwatch.Frequency;
 
-                    if (Interlocked.Exchange(ref requestKeyframeFlag, 0) == 1)
+                    if (Interlocked.Exchange(ref requestKeyframeFlag, 0) == 1 ||
+                        frameNumber == 45 || frameNumber == 90 || frameNumber == 150)
                     {
                         encoder.RequestKeyframe();
                     }
@@ -377,9 +385,16 @@ public sealed class SecondScreenServer : IDisposable
                         capSw.Stop();
                         captureDurationUs = (ushort)Math.Min(capSw.Elapsed.TotalMicroseconds, ushort.MaxValue);
 
-                        if (frame != null)
+                        if (frame != null && frame.RgbaData != null && frame.RgbaData.Length >= streamWidth * streamHeight * 4)
                         {
                             bgraData = frame.RgbaData;
+                            // When DWM finishes painting the newly extended virtual desktop for the first time,
+                            // force an immediate IDR keyframe so the tablet instantly displays the sharp desktop!
+                            if (frame.IsNew && !sawFirstNewDxgiFrame)
+                            {
+                                sawFirstNewDxgiFrame = true;
+                                encoder.RequestKeyframe();
+                            }
                         }
                         else
                         {
@@ -413,7 +428,7 @@ public sealed class SecondScreenServer : IDisposable
                             configSent = true;
                         }
 
-                        if (videoChannel.Reader.Count < 2)
+                        if (videoChannel.Reader.Count < 4 || encoded.IsKeyframe)
                         {
                             sentFrameCount = ++frameNumber;
                             var frameMsg = new VideoFrameMessage(
