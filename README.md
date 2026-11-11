@@ -1,6 +1,6 @@
 <p align="center">
   <!-- LOGO_PLACEHOLDER -->
-  <img src="docs/assets/logo.png" alt="Areas Logo" width="160" onerror="this.style.display='none'"/>
+  <img src="assets/logo.png" alt="Areas Logo" width="160" onerror="this.style.display='none'"/>
   <h1 align="center">Areas — SecondScreen</h1>
   <p align="center">
     <strong>Ultra-low-latency (< 25 ms), high-performance second monitor solution for Windows using Android tablets.</strong>
