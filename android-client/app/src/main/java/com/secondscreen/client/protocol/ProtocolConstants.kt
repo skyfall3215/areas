@@ -22,6 +22,7 @@ object ProtocolConstants {
     const val HELLO_STATUS_OK: Byte = 0x00
     const val HELLO_STATUS_VERSION_MISMATCH: Byte = 0x01
     const val HELLO_STATUS_ENCODER_INIT_FAILED: Byte = 0x02
+    const val HELLO_STATUS_AUTH_FAILED: Byte = 0x03
 }
 
 enum class MessageType(val code: Byte) {

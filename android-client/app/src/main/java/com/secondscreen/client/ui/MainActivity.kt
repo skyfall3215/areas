@@ -62,6 +62,8 @@ import kotlinx.coroutines.withContext
 import java.nio.ByteBuffer
 import java.util.Locale
 
+private class AuthFailedException(message: String) : Exception(message)
+
 class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
     private lateinit var binding: ActivityMainBinding
@@ -149,6 +151,10 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
         val lastIp = prefs.getString("last_lan_ip", "") ?: ""
         if (lastIp.isNotEmpty()) {
             binding.inputIpAddress.setText(lastIp)
+        }
+        val lastPin = prefs.getString("last_pin", "") ?: ""
+        if (lastPin.isNotEmpty()) {
+            binding.inputPin.setText(lastPin)
         }
 
         // Bitrate selector (default 15 Mbps)
@@ -718,29 +724,42 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
             binding.btnCancel.visibility = View.VISIBLE
             binding.txtWarning.visibility = View.GONE
 
-            val backoffs = listOf(500L, 1000L, 2000L, 3000L)
+            val backoffs = listOf(1000L, 1500L, 2000L, 3000L, 4000L)
+            val maxAttempts = 8
             var attempt = 0
 
-            while (isActive && !userCancelled) {
+            while (isActive && !userCancelled && attempt < maxAttempts) {
                 attempt++
                 val isRetry = attempt > 1
 
                 withContext(Dispatchers.Main) {
                     if (isRetry) {
-                        binding.txtStatus.text = "Yeniden bağlanılıyor ($attempt)... Hedef: $host:$port"
+                        // Make sure status & cancel button are visible if stream dropped mid-session
+                        binding.controlOverlay.visibility = View.VISIBLE
+                        binding.floatingControlDock.visibility = View.GONE
+                        setStatsMenuVisible(false)
+                        binding.txtStatus.text = "Bağlantı koptu, yeniden bağlanılıyor ($attempt/$maxAttempts)... Hedef: $host:$port"
                     } else {
                         binding.txtStatus.text = "Bağlanıyor ($host:$port)..."
                     }
                     binding.txtStatus.setTextColor(getColor(android.R.color.darker_gray))
                 }
 
-                var sessionSucceededOnce = false
                 try {
                     runStreamingSession(host, port)
-                    sessionSucceededOnce = true
+                    // Reset attempt counter after a successful active session if it dropped unexpectedly
+                    attempt = 0
+                } catch (e: AuthFailedException) {
+                    withContext(Dispatchers.Main) {
+                        binding.controlOverlay.visibility = View.VISIBLE
+                        binding.txtStatus.text = e.message
+                        binding.txtStatus.setTextColor(getColor(android.R.color.holo_red_light))
+                    }
+                    break // Never retry automatically with wrong PIN
                 } catch (e: ClientIsolationException) {
                     // Yurt / Okul Wi-Fi Client Isolation detected!
                     withContext(Dispatchers.Main) {
+                        binding.controlOverlay.visibility = View.VISIBLE
                         binding.txtWarning.text = e.message
                         binding.txtWarning.visibility = View.VISIBLE
                         binding.txtStatus.text = "Bağlantı engellendi (Client Isolation)"
@@ -751,6 +770,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                     break
                 } catch (e: Exception) {
                     withContext(Dispatchers.Main) {
+                        binding.controlOverlay.visibility = View.VISIBLE
                         binding.txtStatus.text = "Bağlantı koptu veya kurulamadı: ${e.message}"
                         binding.txtStatus.setTextColor(getColor(android.R.color.holo_red_light))
                     }
@@ -759,7 +779,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 if (userCancelled || !isActive) break
 
                 // Exponential backoff before next attempt
-                val backoffMs = backoffs[((attempt - 1).coerceAtMost(backoffs.size - 1))]
+                val backoffMs = backoffs[((attempt - 1).coerceAtLeast(0).coerceAtMost(backoffs.size - 1))]
                 delay(backoffMs)
             }
 
@@ -832,9 +852,13 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
             val isUsb = host == "127.0.0.1" || host == "localhost"
             val featureFlags = ProtocolConstants.FEATURE_FLAG_TOUCH.toInt() or ProtocolConstants.FEATURE_FLAG_LOW_LATENCY_DECODER.toInt()
 
-            val bitrateMbps = getSharedPreferences("second_screen_prefs", Context.MODE_PRIVATE)
-                .getInt("preferred_bitrate_mbps", 15)
+            val prefs = getSharedPreferences("second_screen_prefs", Context.MODE_PRIVATE)
+            val bitrateMbps = prefs.getInt("preferred_bitrate_mbps", 15)
             val preferredBitrateKbps = bitrateMbps * 1000
+            val pinCode = binding.inputPin.text?.toString()?.trim() ?: ""
+            if (pinCode.isNotEmpty()) {
+                prefs.edit().putString("last_pin", pinCode).apply()
+            }
 
             // 3. Send HELLO
             val hello = HelloMessage(
@@ -843,7 +867,8 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 maxFps = refreshRate,
                 preferredBitrateKbps = preferredBitrateKbps,
                 featureFlags = featureFlags.toByte(),
-                deviceName = deviceName
+                deviceName = deviceName,
+                pinCode = pinCode
             )
             val helloPayload = hello.toByteArray()
             val helloHeader = FrameHeader.create(MessageType.HELLO, helloPayload.size.toLong(), sequence = 1)
@@ -859,6 +884,9 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 throw IllegalStateException("Expected HELLO_ACK, got ${ackHeader.msgType}")
             }
             val ack = HelloAckMessage.readPayloadFrom(ByteBuffer.wrap(ackPayload))
+            if (ack.status == ProtocolConstants.HELLO_STATUS_AUTH_FAILED) {
+                throw AuthFailedException("Hatalı PIN! Windows sunucudaki 6 haneli PIN kodunu girin.")
+            }
             lastStreamWidth = ack.streamWidth
             lastStreamHeight = ack.streamHeight
 

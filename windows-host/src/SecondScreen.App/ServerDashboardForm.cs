@@ -41,6 +41,9 @@ public sealed class ServerDashboardForm : Form
     private Label _lblUsbStatus = null!;
     private Label _lblWifiIp = null!;
     private Label _lblHotspotStatus = null!;
+    private Label _lblPinCode = null!;
+    private CheckBox _chkRequirePin = null!;
+    private Button _btnRegeneratePin = null!;
     private Button _btnRefreshUsb = null!;
     private Button _btnHotspotSettings = null!;
 
@@ -232,6 +235,32 @@ public sealed class ServerDashboardForm : Form
         _lblUsbStatus = CreateInfoLabel("• USB-C Cable (adb reverse): Checking...");
         _lblWifiIp = CreateInfoLabel("• Wi-Fi LAN IP: 192.168.1.212:27183");
         _lblHotspotStatus = CreateInfoLabel("• Mobile Hotspot: Checking...");
+        _lblPinCode = new Label
+        {
+            Text = $"• Security PIN: {_server.CurrentPin} (TLS Encrypted)",
+            Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
+            ForeColor = Color.FromArgb(34, 197, 94),
+            AutoSize = true,
+            Margin = new Padding(0, 4, 0, 2)
+        };
+        _chkRequirePin = new CheckBox
+        {
+            Text = "Require PIN",
+            Checked = _server.RequirePin,
+            ForeColor = Color.FromArgb(220, 220, 235),
+            AutoSize = true,
+            Margin = new Padding(4, 6, 8, 0)
+        };
+        _chkRequirePin.CheckedChanged += (_, _) => _server.RequirePin = _chkRequirePin.Checked;
+        _btnRegeneratePin = CreateSmallButton("New PIN", (_, _) =>
+        {
+            string newPin = _server.RegeneratePin();
+            bool isEn = _currentLanguage == AppLanguage.English;
+            _lblPinCode.Text = isEn
+                ? $"• Security PIN: {newPin} (TLS Encrypted)"
+                : $"• Güvenlik PIN: {newPin} (TLS Şifreli)";
+            AddLog(isEn ? $"[+] Security PIN regenerated: {newPin}" : $"[+] Yeni Güvenlik PIN oluşturuldu: {newPin}");
+        });
 
         _btnHotspotSettings = CreateSmallButton("Hotspot Settings", (_, _) => HotspotManager.OpenHotspotSettings());
         _btnRefreshUsb = CreateSmallButton("Refresh USB", async (_, _) => await _server.RefreshUsbTunnelAsync());
@@ -239,15 +268,20 @@ public sealed class ServerDashboardForm : Form
         pnlConnCard.Controls.Add(_lblUsbStatus);
         pnlConnCard.Controls.Add(_lblWifiIp);
         pnlConnCard.Controls.Add(_lblHotspotStatus);
+        pnlConnCard.Controls.Add(_lblPinCode);
 
         var pnlConnButtons = new FlowLayoutPanel
         {
             FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = true,
             AutoSize = true,
-            Margin = new Padding(0, 8, 0, 0)
+            MaximumSize = new Size(410, 0),
+            Margin = new Padding(0, 6, 0, 0)
         };
         pnlConnButtons.Controls.Add(_btnRefreshUsb);
         pnlConnButtons.Controls.Add(_btnHotspotSettings);
+        pnlConnButtons.Controls.Add(_btnRegeneratePin);
+        pnlConnButtons.Controls.Add(_chkRequirePin);
         pnlConnCard.Controls.Add(pnlConnButtons);
         pnlMiddle.Controls.Add(pnlConnCard, 0, 0);
 
@@ -405,6 +439,11 @@ public sealed class ServerDashboardForm : Form
         // Card Buttons
         _btnRefreshUsb.Text = isEn ? "Refresh USB" : "USB Tüneli Yenile";
         _btnHotspotSettings.Text = isEn ? "Hotspot Settings" : "Hotspot Ayarları";
+        _btnRegeneratePin.Text = isEn ? "New PIN" : "Yeni PIN";
+        _chkRequirePin.Text = isEn ? "Require PIN" : "PIN Zorunlu";
+        _lblPinCode.Text = isEn
+            ? $"• Security PIN: {_server.CurrentPin} (TLS Encrypted)"
+            : $"• Güvenlik PIN: {_server.CurrentPin} (TLS Şifreli)";
         _btnInstallDriver.Text = isEn ? "Install Driver" : "Sürücüyü Kur (IddCx)";
         _btnUninstallDriver.Text = isEn ? "Uninstall Driver" : "Sürücüyü Kaldır";
         _btnSingleScreen.Text = isEn ? "Laptop Screen Only" : "Yalnızca Laptop Ekranı";

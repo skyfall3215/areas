@@ -10,7 +10,8 @@ data class HelloMessage(
     val maxFps: Int,
     val preferredBitrateKbps: Int,
     val featureFlags: Byte,
-    val deviceName: String
+    val deviceName: String,
+    val pinCode: String = ""
 ) {
     companion object {
         const val PAYLOAD_SIZE = 32
@@ -22,8 +23,13 @@ data class HelloMessage(
             val fps = buffer.short.toInt() and 0xFFFF
             val bitrate = buffer.short.toInt() and 0xFFFF
             val features = buffer.get()
-            // Skip 7 reserved bytes
-            for (i in 0 until 7) buffer.get()
+
+            val pinBytes = ByteArray(6)
+            buffer.get(pinBytes)
+            var pinNull = pinBytes.indexOf(0.toByte())
+            if (pinNull < 0) pinNull = 6
+            val pinCode = String(pinBytes, 0, pinNull, StandardCharsets.US_ASCII)
+            buffer.get() // 1 reserved byte (byte 15)
 
             val nameBytes = ByteArray(16)
             buffer.get(nameBytes)
@@ -31,7 +37,7 @@ data class HelloMessage(
             if (nullIdx < 0) nullIdx = 16
             val deviceName = String(nameBytes, 0, nullIdx, StandardCharsets.UTF_8)
 
-            return HelloMessage(width, height, fps, bitrate, features, deviceName)
+            return HelloMessage(width, height, fps, bitrate, features, deviceName, pinCode)
         }
     }
 
@@ -42,8 +48,12 @@ data class HelloMessage(
         buffer.putShort((maxFps and 0xFFFF).toShort())
         buffer.putShort((preferredBitrateKbps and 0xFFFF).toShort())
         buffer.put(featureFlags)
-        // 7 reserved bytes
-        for (i in 0 until 7) buffer.put(0.toByte())
+
+        // 6 bytes ASCII PIN (bytes 9..14) + 1 reserved byte (byte 15)
+        val pinBytes = pinCode.toByteArray(StandardCharsets.US_ASCII)
+        val pinCopy = minOf(pinBytes.size, 6)
+        buffer.put(pinBytes, 0, pinCopy)
+        for (i in pinCopy until 7) buffer.put(0.toByte())
 
         val nameBytes = deviceName.toByteArray(StandardCharsets.UTF_8)
         val copyLen = minOf(nameBytes.size, 16)

@@ -23,6 +23,7 @@ public static class ProtocolConstants
     public const byte HelloStatusOk = 0x00;
     public const byte HelloStatusVersionMismatch = 0x01;
     public const byte HelloStatusEncoderInitFailed = 0x02;
+    public const byte HelloStatusAuthFailed = 0x03;
 }
 
 public enum MessageType : byte

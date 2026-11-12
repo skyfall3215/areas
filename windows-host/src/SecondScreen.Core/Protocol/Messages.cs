@@ -9,7 +9,8 @@ public sealed record HelloMessage(
     ushort MaxFps,
     ushort PreferredBitrateKbps,
     byte FeatureFlags,
-    string DeviceName)
+    string DeviceName,
+    string PinCode = "")
 {
     public const int PayloadSize = 32;
 
@@ -24,7 +25,13 @@ public sealed record HelloMessage(
         BinaryPrimitives.WriteUInt16BigEndian(destination[4..6], MaxFps);
         BinaryPrimitives.WriteUInt16BigEndian(destination[6..8], PreferredBitrateKbps);
         destination[8] = FeatureFlags;
-        // 9..15 reserved (zeros)
+        // 9..14: 6-byte ASCII PIN code, 15: reserved (0)
+        if (!string.IsNullOrEmpty(PinCode))
+        {
+            byte[] pinBytes = Encoding.ASCII.GetBytes(PinCode);
+            int pinLen = Math.Min(pinBytes.Length, 6);
+            pinBytes.AsSpan(0, pinLen).CopyTo(destination.Slice(9, pinLen));
+        }
         byte[] nameBytes = Encoding.UTF8.GetBytes(DeviceName ?? string.Empty);
         int copyLen = Math.Min(nameBytes.Length, 16);
         nameBytes.AsSpan(0, copyLen).CopyTo(destination.Slice(16, copyLen));
@@ -40,7 +47,13 @@ public sealed record HelloMessage(
         ushort fps = BinaryPrimitives.ReadUInt16BigEndian(source[4..6]);
         ushort bitrate = BinaryPrimitives.ReadUInt16BigEndian(source[6..8]);
         byte features = source[8];
-        
+
+        ReadOnlySpan<byte> pinSpan = source.Slice(9, 6);
+        int pinNull = pinSpan.IndexOf((byte)0);
+        if (pinNull >= 0)
+            pinSpan = pinSpan.Slice(0, pinNull);
+        string pinCode = Encoding.ASCII.GetString(pinSpan);
+
         // Read 16-byte DeviceName, trim null terminators
         ReadOnlySpan<byte> nameSpan = source.Slice(16, 16);
         int nullIdx = nameSpan.IndexOf((byte)0);
@@ -48,7 +61,7 @@ public sealed record HelloMessage(
             nameSpan = nameSpan.Slice(0, nullIdx);
         string deviceName = Encoding.UTF8.GetString(nameSpan);
 
-        return new HelloMessage(width, height, fps, bitrate, features, deviceName);
+        return new HelloMessage(width, height, fps, bitrate, features, deviceName, pinCode);
     }
 }
 

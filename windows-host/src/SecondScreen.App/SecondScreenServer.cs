@@ -2,6 +2,9 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
+using System.Text;
 using System.Threading.Channels;
 using SecondScreen.Core.Diagnostics;
 using SecondScreen.Core.Protocol;
@@ -26,14 +29,25 @@ public sealed class SecondScreenServer : IDisposable
     private Task? _serverTask;
     private LanDiscoveryBroadcaster? _broadcaster;
     private TcpListener? _listener;
+    private readonly X509Certificate2 _tlsCert = TcpTransport.CreateEphemeralServerCertificate();
 
     public bool IsRunning { get; private set; }
     public int Port { get; }
+    public string CurrentPin { get; private set; } = GeneratePin();
+    public bool RequirePin { get; set; } = true;
     public string? ConnectedClientName { get; private set; }
     public string? ConnectedClientDetails { get; private set; }
     public string ActiveEncoderLabel { get; private set; } = "--";
     public bool IsHardwareEncoderActive { get; private set; }
     public bool IsClientConnected => !string.IsNullOrEmpty(ConnectedClientName);
+
+    public string RegeneratePin()
+    {
+        CurrentPin = GeneratePin();
+        return CurrentPin;
+    }
+
+    private static string GeneratePin() => RandomNumberGenerator.GetInt32(100_000, 1_000_000).ToString();
 
     public SecondScreenServer(int port = ProtocolConstants.DefaultPort)
     {
@@ -155,8 +169,8 @@ public sealed class SecondScreenServer : IDisposable
 
     private async Task HandleClientSessionAsync(TcpClient tcpClient, string transportMode, CancellationToken ct)
     {
-        await using var transport = new TcpTransport(tcpClient);
         using var sessionCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        await using var transport = await TcpTransport.CreateServerTransportAsync(tcpClient, _tlsCert, sessionCts.Token);
         var rttTracker = new RttTracker();
 
         // 1. Wait for HELLO
@@ -168,8 +182,34 @@ public sealed class SecondScreenServer : IDisposable
         }
 
         var hello = HelloMessage.ReadPayloadFrom(payload);
+
+        // 1b. Verify 6-digit PIN if required
+        if (RequirePin)
+        {
+            byte[] expectedPin = Encoding.ASCII.GetBytes(CurrentPin);
+            byte[] providedPin = Encoding.ASCII.GetBytes((hello.PinCode ?? string.Empty).Trim());
+            if (providedPin.Length != expectedPin.Length || !CryptographicOperations.FixedTimeEquals(providedPin, expectedPin))
+            {
+                Log($"[!] Yetkisiz bağlantı reddedildi (Hatalı PIN): {hello.DeviceName}");
+                var rejectAck = new HelloAckMessage(
+                    Status: ProtocolConstants.HelloStatusAuthFailed,
+                    CodecId: ProtocolConstants.CodecIdH264,
+                    StreamWidth: 0,
+                    StreamHeight: 0,
+                    TargetFps: 0,
+                    BitrateBps: 0,
+                    SessionId: 0);
+                byte[] rejectPayload = new byte[HelloAckMessage.PayloadSize];
+                rejectAck.WritePayloadTo(rejectPayload);
+                var rejectHeader = FrameHeader.Create(MessageType.HelloAck, (uint)rejectPayload.Length, sequence: 1);
+                await transport.SendPacketAsync(rejectHeader, rejectPayload, sessionCts.Token);
+                return;
+            }
+        }
+
+        string encTag = transport.IsEncrypted ? "TLS" : "TCP";
         ConnectedClientName = string.IsNullOrWhiteSpace(hello.DeviceName) ? "Android Tablet" : hello.DeviceName;
-        ConnectedClientDetails = $"{ConnectedClientName} ({hello.NativeWidth}x{hello.NativeHeight} @ {hello.MaxFps}Hz) via {transportMode}";
+        ConnectedClientDetails = $"{ConnectedClientName} ({hello.NativeWidth}x{hello.NativeHeight} @ {hello.MaxFps}Hz) via {transportMode} [{encTag}]";
         OnClientSessionChanged?.Invoke(ConnectedClientDetails);
         OnStatusChanged?.Invoke($"Bağlı: {ConnectedClientName}");
         Log($"[+] HELLO alındı: {ConnectedClientDetails}, İstenen Bitrate: {hello.PreferredBitrateKbps} kbps");

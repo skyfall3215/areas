@@ -12,6 +12,12 @@ import java.io.BufferedOutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.SocketTimeoutException
+import java.security.SecureRandom
+import java.security.cert.X509Certificate
+import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLSocket
+import javax.net.ssl.TrustManager
+import javax.net.ssl.X509TrustManager
 
 class ClientIsolationException(
     message: String = "Ağ cihazlar arası iletişimi engelliyor olabilir (Yurt/Okul Wi-Fi). Lütfen USB veya Mobil Etkin Nokta modunu seçin."
@@ -32,27 +38,46 @@ class SocketTransport(
         get() = socket?.isConnected == true && socket?.isClosed == false
 
     suspend fun connect() = withContext(Dispatchers.IO) {
-        val s = Socket()
-        s.tcpNoDelay = true
-        s.sendBufferSize = 512 * 1024
-        s.receiveBufferSize = 512 * 1024
+        val rawSocket = Socket()
+        rawSocket.tcpNoDelay = true
+        rawSocket.sendBufferSize = 512 * 1024
+        rawSocket.receiveBufferSize = 512 * 1024
 
         try {
-            s.connect(InetSocketAddress(host, port), connectTimeoutMs)
+            rawSocket.connect(InetSocketAddress(host, port), connectTimeoutMs)
         } catch (e: SocketTimeoutException) {
-            s.close()
+            rawSocket.close()
             if (isLanHost(host)) {
                 throw ClientIsolationException()
             }
             throw e
         } catch (e: Exception) {
-            s.close()
+            rawSocket.close()
             throw e
         }
 
-        socket = s
-        inputStream = BufferedInputStream(s.getInputStream(), 512 * 1024)
-        outputStream = BufferedOutputStream(s.getOutputStream(), 512 * 1024)
+        // Upgrade connection to TLS 1.2/1.3 (ephemeral LAN cert; session authenticated via 6-digit PIN)
+        val tlsSocket: SSLSocket = try {
+            val trustAll = arrayOf<TrustManager>(object : X509TrustManager {
+                override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+                override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+                override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
+            })
+            val sslCtx = SSLContext.getInstance("TLS")
+            sslCtx.init(null, trustAll, SecureRandom())
+            val ssl = sslCtx.socketFactory.createSocket(rawSocket, host, port, true) as SSLSocket
+            ssl.useClientMode = true
+            ssl.tcpNoDelay = true
+            ssl.startHandshake()
+            ssl
+        } catch (e: Exception) {
+            try { rawSocket.close() } catch (_: Exception) {}
+            throw e
+        }
+
+        socket = tlsSocket
+        inputStream = BufferedInputStream(tlsSocket.getInputStream(), 512 * 1024)
+        outputStream = BufferedOutputStream(tlsSocket.getOutputStream(), 512 * 1024)
     }
 
     override suspend fun sendPacket(header: FrameHeader, payload: ByteArray) = withContext(Dispatchers.IO) {
