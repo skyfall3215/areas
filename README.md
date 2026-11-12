@@ -3,7 +3,7 @@
   <img src="assets/logo.png" alt="Areas Logo" width="160" onerror="this.style.display='none'"/>
   <h1 align="center">Areas — SecondScreen</h1>
   <p align="center">
-    <strong>Ultra-low-latency (< 25 ms), high-performance second monitor solution for Windows using Android tablets.</strong>
+    <strong>Second monitor solution for Windows using Android tablets.</strong>
   </p>
   <p align="center">
     <a href="https://dotnet.microsoft.com/"><img src="https://img.shields.io/badge/.NET-8.0-512BD4?logo=dotnet&logoColor=white" alt=".NET 8"/></a>
