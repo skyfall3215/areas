@@ -47,11 +47,15 @@ import com.secondscreen.client.protocol.TouchEventMessage
 import com.secondscreen.client.protocol.VideoConfigMessage
 import com.secondscreen.client.protocol.VideoFrameMessage
 import com.secondscreen.client.telemetry.TelemetryTracker
+import com.secondscreen.client.decoder.DecodeResult
 import com.secondscreen.client.transport.ClientIsolationException
 import com.secondscreen.client.transport.SocketTransport
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
@@ -62,12 +66,25 @@ import kotlinx.coroutines.withContext
 import java.nio.ByteBuffer
 import java.util.Locale
 
+private sealed interface DecodeItem {
+    class Config(val spsPps: ByteArray) : DecodeItem
+    class Frame(
+        val nal: ByteArray,
+        val ptsUs: Long,
+        val isKeyframe: Boolean,
+        val frameNumber: Long,
+        val captureUs: Int,
+        val encodeUs: Int,
+        val wireBytes: Int
+    ) : DecodeItem
+}
+
 private class AuthFailedException(message: String) : Exception(message)
 
 class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
     private lateinit var binding: ActivityMainBinding
-    private var videoDecoder: VideoDecoder? = null
+    @Volatile private var videoDecoder: VideoDecoder? = null
     private var sessionJob: Job? = null
     private var isSurfaceAvailable = false
     private var lastStreamWidth = 1920
@@ -942,7 +959,11 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                     val s = telemetry.getSnapshot()
                     binding.txtHudFpsBitrate.text = String.format(Locale.US, "FPS: %d | Bitrate: %.1f Mbps", s.fps, s.bitrateMbps)
                     binding.txtHudSentBitrate.visibility = View.GONE
-                    binding.txtHudLoss.visibility = View.GONE
+                    binding.txtHudLoss.visibility = View.VISIBLE
+                    binding.txtHudLoss.text = String.format(
+                        Locale.US, "Drop: %d | IDR: %d | NoInput: %d",
+                        s.droppedFrames, s.idrRequests, s.inputUnavailable
+                    )
                     binding.txtHudEncode.text = String.format(Locale.US, "Encode: %.1f ms (Cap: %.1f ms)", s.encodeMs, s.captureMs)
                     binding.txtHudNetwork.text = String.format(Locale.US, "Ağ (RTT/2): %.1f ms", s.networkRttDiv2Ms)
                     binding.txtHudDecode.text = String.format(Locale.US, "Decode: %.1f ms", s.decodeMs)
@@ -965,62 +986,96 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
             telemetry.resetCounters()
             val waitingForKeyframe = java.util.concurrent.atomic.AtomicBoolean(false)
-            var sequence = 1000
-            var lastKeyframeReqMs = 0L
+            val sequence = java.util.concurrent.atomic.AtomicInteger(1000)
+            val lastKeyframeReqMs = java.util.concurrent.atomic.AtomicLong(0L)
 
+            // Called from both the reader and the decoder thread.
             val maybeRequestKeyframe: (Long) -> Unit = { lastGoodFrame ->
                 val now = System.currentTimeMillis()
-                // Rate limit: at most 1 keyframe request per 500 ms (max ~1-2/sec) to avoid IDR storms
-                if (now - lastKeyframeReqMs >= 500) {
-                    lastKeyframeReqMs = now
+                val prev = lastKeyframeReqMs.get()
+                // Rate limit: at most 1 request per 500 ms; CAS so two threads never both send.
+                if (now - prev >= 500 && lastKeyframeReqMs.compareAndSet(prev, now)) {
                     telemetry.onIdrRequested()
                     launch(Dispatchers.IO) {
                         try {
                             val req = KeyframeReqMessage(lastGoodFrame)
                             val reqPayload = req.toByteArray()
-                            val reqHeader = FrameHeader.create(MessageType.KEYFRAME_REQ, reqPayload.size.toLong(), sequence = sequence++)
+                            val reqHeader = FrameHeader.create(
+                                MessageType.KEYFRAME_REQ,
+                                reqPayload.size.toLong(),
+                                sequence = sequence.getAndIncrement()
+                            )
                             transport.sendPacket(reqHeader, reqPayload)
                         } catch (_: Exception) {}
                     }
                 }
             }
 
-            // 7. Stream receive loop
-            try {
+            // ---- bounded hand-off between reader and decoder ----
+            val decodeQueue = Channel<DecodeItem>(capacity = 4)
+            val decodeDispatcher = java.util.concurrent.Executors
+                .newSingleThreadExecutor { r -> Thread(r, "AreasDecode") }
+                .asCoroutineDispatcher()
+            var latestConfig: DecodeItem.Config? = null // touched by the reader thread only
+
+            // Reader thread only. Never blocks: if the decoder fell behind, resync instead of waiting.
+            val enqueue: (DecodeItem) -> Unit = { item ->
+                if (!decodeQueue.trySend(item).isSuccess) {
+                    var dropped = 1
+                    while (decodeQueue.tryReceive().isSuccess) dropped++
+                    repeat(dropped) { telemetry.onFrameDropped() }
+                    if (item is DecodeItem.Frame && item.isKeyframe) {
+                        latestConfig?.let { decodeQueue.trySend(it) }
+                        decodeQueue.trySend(item) // fresh IDR resyncs everything
+                    } else if (item is DecodeItem.Config) {
+                        decodeQueue.trySend(item)
+                    } else {
+                        waitingForKeyframe.set(true)
+                        maybeRequestKeyframe((item as DecodeItem.Frame).frameNumber)
+                    }
+                }
+            }
+
+            // ---- reader: socket + Ping/Pong only, off the main thread ----
+            val readerJob = launch(Dispatchers.IO) {
                 while (isActive && transport.isConnected) {
                     val (pktHeader, pktPayload) = transport.receivePacket()
                     when (pktHeader.msgType) {
                         MessageType.VIDEO_CONFIG -> {
                             val config = VideoConfigMessage.readPayloadFrom(pktPayload)
-                            videoDecoder?.configure(lastStreamWidth, lastStreamHeight, config.spsPpsData)
+                            val item = DecodeItem.Config(config.spsPpsData)
+                            latestConfig = item
+                            enqueue(item)
                         }
                         MessageType.VIDEO_FRAME -> {
-                            // Video frames are delivered over the TCP stream
                             val frame = VideoFrameMessage.readPayloadFrom(pktPayload, pktHeader.flags)
-                            if (waitingForKeyframe.get()) {
-                                if (!frame.isKeyframe) {
-                                    telemetry.onFrameDropped()
-                                    continue
-                                }
+                            if (frame.isKeyframe) {
                                 waitingForKeyframe.set(false)
-                            }
-
-                            val t0 = System.nanoTime()
-                            val ok = videoDecoder?.decodeFrame(frame.nalData, pktHeader.timestampUs, frame.isKeyframe) ?: true
-                            val decNs = System.nanoTime() - t0
-                            telemetry.onFrameDecoded(frame.captureDurationUs, frame.encodeDurationUs, decNs, pktPayload.size)
-
-                            if (!ok) {
-                                waitingForKeyframe.set(true)
+                            } else if (waitingForKeyframe.get()) {
                                 telemetry.onFrameDropped()
-                                maybeRequestKeyframe(frame.frameNumber)
+                                continue
                             }
+                            enqueue(
+                                DecodeItem.Frame(
+                                    nal = frame.nalData,
+                                    ptsUs = pktHeader.timestampUs,
+                                    isKeyframe = frame.isKeyframe,
+                                    frameNumber = frame.frameNumber,
+                                    captureUs = frame.captureDurationUs,
+                                    encodeUs = frame.encodeDurationUs,
+                                    wireBytes = pktPayload.size
+                                )
+                            )
                         }
                         MessageType.PING -> {
                             val ping = PingMessage.readPayloadFrom(ByteBuffer.wrap(pktPayload))
                             val pong = telemetry.createPong(ping)
                             val pongPayload = pong.toByteArray()
-                            val pongHeader = FrameHeader.create(MessageType.PONG, pongPayload.size.toLong(), sequence = sequence++)
+                            val pongHeader = FrameHeader.create(
+                                MessageType.PONG,
+                                pongPayload.size.toLong(),
+                                sequence = sequence.getAndIncrement()
+                            )
                             transport.sendPacket(pongHeader, pongPayload)
                         }
                         MessageType.PONG -> {
@@ -1036,12 +1091,61 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                         }
                     }
                 }
+            }
+
+            // ---- decoder: dedicated thread ----
+            val decodeJob = launch(decodeDispatcher) {
+                android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY)
+                for (item in decodeQueue) {
+                    when (item) {
+                        is DecodeItem.Config -> {
+                            try {
+                                videoDecoder?.configure(lastStreamWidth, lastStreamHeight, item.spsPps)
+                            } catch (e: Exception) {
+                                Log.e("StreamDecode", "configure failed", e)
+                                waitingForKeyframe.set(true)
+                                maybeRequestKeyframe(0L)
+                            }
+                        }
+                        is DecodeItem.Frame -> {
+                            if (item.isKeyframe) {
+                                waitingForKeyframe.set(false)
+                            } else if (waitingForKeyframe.get()) {
+                                telemetry.onFrameDropped()
+                                continue
+                            }
+
+                            val t0 = System.nanoTime()
+                            val result = videoDecoder?.decodeFrame(item.nal, item.ptsUs, item.isKeyframe)
+                                ?: DecodeResult.OK // surface not available yet: same as before
+                            val decNs = System.nanoTime() - t0
+
+                            if (result == DecodeResult.OK) {
+                                telemetry.onFrameDecoded(item.captureUs, item.encodeUs, decNs, item.wireBytes)
+                            } else {
+                                if (result == DecodeResult.NO_INPUT) telemetry.onInputUnavailable()
+                                waitingForKeyframe.set(true)
+                                telemetry.onFrameDropped()
+                                maybeRequestKeyframe(item.frameNumber)
+                            }
+                        }
+                    }
+                }
+            }
+
+            try {
+                readerJob.join()
             } finally {
                 isStreamingActive = false
+                readerJob.cancel()
                 touchSenderJob.cancel()
+                keyboardSenderJob.cancel() // see note below
                 while (touchChannel.tryReceive().isSuccess) {}
                 hudJob.cancel()
                 pingJob.cancel()
+                decodeQueue.close()
+                withContext(NonCancellable) { decodeJob.cancelAndJoin() }
+                decodeDispatcher.close()
             }
         } finally {
             if (activeTransport === transport) {

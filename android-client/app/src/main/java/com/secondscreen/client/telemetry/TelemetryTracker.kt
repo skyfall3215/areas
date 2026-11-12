@@ -16,7 +16,8 @@ data class TelemetrySnapshot(
     val estimatedPipelineMs: Double,
     val lostPackets: Long = 0,
     val droppedFrames: Long = 0,
-    val idrRequests: Long = 0
+    val idrRequests: Long = 0,
+    val inputUnavailable: Long = 0
 )
 
 class TelemetryTracker {
@@ -26,6 +27,7 @@ class TelemetryTracker {
     private val lostPacketsCount = AtomicLong(0)
     private val droppedFramesCount = AtomicLong(0)
     private val idrRequestsCount = AtomicLong(0)
+    private val inputUnavailableCount = AtomicLong(0)
 
     private var frameCount = 0
     private var totalBytesInPeriod = 0L
@@ -61,10 +63,15 @@ class TelemetryTracker {
         idrRequestsCount.incrementAndGet()
     }
 
+    fun onInputUnavailable() {
+        inputUnavailableCount.incrementAndGet()
+    }
+
     fun resetCounters() {
         lostPacketsCount.set(0)
         droppedFramesCount.set(0)
         idrRequestsCount.set(0)
+        inputUnavailableCount.set(0)
         hostSentBitrateMbps = 0.0
         hostSentPacketsCount = 0L
     }
@@ -141,7 +148,8 @@ class TelemetryTracker {
             estimatedPipelineMs = estimatedTotal,
             lostPackets = lostPacketsCount.get(),
             droppedFrames = droppedFramesCount.get(),
-            idrRequests = idrRequestsCount.get()
+            idrRequests = idrRequestsCount.get(),
+            inputUnavailable = inputUnavailableCount.get()
         )
     }
 }
