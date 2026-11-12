@@ -244,9 +244,15 @@ public sealed class Win32TouchInjector : ITouchInjector
                     case TouchAction.DoubleClick:
                         mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
                         mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
-                        System.Threading.Thread.Sleep(30);
-                        mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
-                        mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
+                        _ = Task.Run(async () =>
+                        {
+                            await Task.Delay(30).ConfigureAwait(false);
+                            lock (_lock)
+                            {
+                                mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
+                                mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
+                            }
+                        });
                         break;
                     case TouchAction.Scroll:
                         short scrollDelta = (short)primary.NormalizedY;

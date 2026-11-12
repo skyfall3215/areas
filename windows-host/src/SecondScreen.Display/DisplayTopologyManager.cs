@@ -44,8 +44,9 @@ public static class DisplayTopologyManager
                 UseShellExecute = true,
                 CreateNoWindow = true
             });
-            proc?.WaitForExit(2000);
-            return true;
+            if (proc == null) return false;
+            proc.WaitForExit(2000);
+            return !proc.HasExited || proc.ExitCode == 0;
         }
         catch
         {
@@ -75,8 +76,9 @@ public static class DisplayTopologyManager
                 UseShellExecute = true,
                 CreateNoWindow = true
             });
-            proc?.WaitForExit(2000);
-            return true;
+            if (proc == null) return false;
+            proc.WaitForExit(2000);
+            return !proc.HasExited || proc.ExitCode == 0;
         }
         catch
         {
