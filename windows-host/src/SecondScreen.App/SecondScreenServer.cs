@@ -31,6 +31,8 @@ public sealed class SecondScreenServer : IDisposable
     public int Port { get; }
     public string? ConnectedClientName { get; private set; }
     public string? ConnectedClientDetails { get; private set; }
+    public string ActiveEncoderLabel { get; private set; } = "--";
+    public bool IsHardwareEncoderActive { get; private set; }
     public bool IsClientConnected => !string.IsNullOrEmpty(ConnectedClientName);
 
     public SecondScreenServer(int port = ProtocolConstants.DefaultPort)
@@ -351,6 +353,21 @@ public sealed class SecondScreenServer : IDisposable
                 using var encoder = new MfH264Encoder();
                 encoder.Initialize(streamWidth, streamHeight, targetFps, (int)bitrateBps);
 
+                ActiveEncoderLabel = encoder.StatusLabel;
+                IsHardwareEncoderActive = encoder.IsHardwareAccelerated;
+                if (encoder.IsHardwareAccelerated)
+                {
+                    Log($"[+] H.264 Encoder (GPU): {encoder.EncoderName}");
+                }
+                else if (encoder.FallbackReason != null)
+                {
+                    Log($"[!] GPU Encoder başlatılamadı ({encoder.FallbackReason}) -> CPU Fallback: {encoder.EncoderName}");
+                }
+                else
+                {
+                    Log($"[+] H.264 Encoder (CPU): {encoder.EncoderName}");
+                }
+
                 long targetFrameIntervalTicks = Stopwatch.Frequency / targetFps;
                 var stopwatch = Stopwatch.StartNew();
                 long nextTargetTicks = stopwatch.ElapsedTicks;
@@ -427,8 +444,15 @@ public sealed class SecondScreenServer : IDisposable
 
                         // Encode
                         var encSw = Stopwatch.StartNew();
+                        bool wasHw = encoder.IsHardwareAccelerated;
                         var encoded = encoder.EncodeBgraFrame(bgraData, frameStartUs);
                         encSw.Stop();
+                        if (wasHw && !encoder.IsHardwareAccelerated)
+                        {
+                            ActiveEncoderLabel = encoder.StatusLabel;
+                            IsHardwareEncoderActive = false;
+                            Log($"[!] GPU Encoder çalışma anında hata verdi ({encoder.FallbackReason}) -> CPU Fallback: {encoder.EncoderName}");
+                        }
                         ushort encodeDurationUs = (ushort)Math.Min(encSw.Elapsed.TotalMicroseconds, ushort.MaxValue);
 
                         if (encoded != null)
@@ -543,6 +567,8 @@ public sealed class SecondScreenServer : IDisposable
                 // Prevent ServerLoopAsync finally block from calling RestoreInternalOnly a second time
                 ConnectedClientName = null;
                 ConnectedClientDetails = null;
+                ActiveEncoderLabel = "--";
+                IsHardwareEncoderActive = false;
             }
         }
     }

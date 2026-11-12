@@ -519,9 +519,8 @@ public sealed class ServerDashboardForm : Form
 
     private void SetupSystemTray()
     {
-        string icoPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "app.ico");
-        if (!File.Exists(icoPath)) icoPath = @"D:\Areas\areas.ico";
-        if (File.Exists(icoPath)) _trayIcon.Icon = new Icon(icoPath);
+        string? icoPath = ResolveAssetPath("app.ico", "areas.ico");
+        if (icoPath != null) _trayIcon.Icon = new Icon(icoPath);
 
         _trayIcon.Text = "Areas Server — Second Screen";
         _trayIcon.Visible = true;
@@ -621,7 +620,10 @@ public sealed class ServerDashboardForm : Form
         string streamWord = isEn ? "Stream" : "Akış";
         string rttWord = isEn ? "Network Latency" : "Ağ Gecikmesi";
         string oneWayWord = isEn ? "One-way" : "Tek Yön";
-        _lblSessionStats.Text = $"• {streamWord}: 2304x1440 @ {fps:F0} FPS | {rttWord}: {rttMs:F1} ms ({oneWayWord}: {rttMs/2.0:F1} ms) | Bitrate: {bitrateMbps:F1} Mbps";
+        _lblSessionStats.Text = $"• {streamWord}: 2304x1440 @ {fps:F0} FPS | {rttWord}: {rttMs:F1} ms ({oneWayWord}: {rttMs/2.0:F1} ms) | Bitrate: {bitrateMbps:F1} Mbps | Encoder: {_server.ActiveEncoderLabel}";
+        _lblSessionStats.ForeColor = _server.IsHardwareEncoderActive
+            ? Color.FromArgb(34, 197, 94)
+            : Color.FromArgb(245, 158, 11);
     }
 
     private void AddLog(string msg)
