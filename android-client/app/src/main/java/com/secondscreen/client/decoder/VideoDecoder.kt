@@ -39,17 +39,17 @@ class VideoDecoder(private val surface: Surface) : AutoCloseable {
                 val format = MediaFormat.createVideoFormat(MIME_TYPE, width, height)
                 format.setByteBuffer("csd-0", ByteBuffer.wrap(spsPpsData))
 
-                // Low-Latency Flags
+                // Low-Latency Flags (same vendor set Moonlight uses against Sunshine)
                 format.setInteger(MediaFormat.KEY_PRIORITY, 0) // Realtime priority
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                     format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
                 }
-                try {
-                    format.setInteger("vendor.qti-ext-dec-low-latency.enable", 1)
-                } catch (_: Exception) {}
-                try {
-                    format.setInteger("vendor.rtc-ext-dec-low-latency.enable", 1)
-                } catch (_: Exception) {}
+                format.setInteger("vendor.qti-ext-dec-picture-order.enable", 1) // Qualcomm: output in decode order, no reorder buffering
+                format.setInteger("vendor.qti-ext-dec-low-latency.enable", 1)
+                format.setInteger("vendor.rtc-ext-dec-low-latency.enable", 1) // Exynos
+                format.setInteger("vendor.low-latency.enable", 1) // Amlogic
+                format.setInteger("vendor.hisi-ext-low-latency-video-dec.video-scene-for-low-latency-req", 1) // Kirin
+                format.setInteger("vendor.hisi-ext-low-latency-video-dec.video-scene-for-low-latency-rdy", -1)
 
                 decoder.configure(format, surface, null, 0)
             } catch (_: Exception) {

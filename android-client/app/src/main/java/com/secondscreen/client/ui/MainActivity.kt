@@ -967,7 +967,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                             videoDecoder?.configure(lastStreamWidth, lastStreamHeight, config.spsPpsData)
                         }
                         MessageType.VIDEO_FRAME -> {
-                            // Handled over TCP when not in Sunshine mode
+                            // Video frames are delivered over the TCP stream
                             val frame = VideoFrameMessage.readPayloadFrom(pktPayload, pktHeader.flags)
                             if (waitingForKeyframe.get()) {
                                 if (!frame.isKeyframe) {

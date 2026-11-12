@@ -44,3 +44,4 @@ public class MfH264EncoderTests
         Assert.NotNull(encoder.CachedSpsPps);
     }
 }
+

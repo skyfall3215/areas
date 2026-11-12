@@ -197,7 +197,7 @@ public sealed class SecondScreenServer : IDisposable
 
         ushort streamWidth = targetDisplay.Bounds.Width > 0 ? (ushort)(targetDisplay.Bounds.Width & ~1) : (ushort)(hello.NativeWidth & ~1);
         ushort streamHeight = targetDisplay.Bounds.Height > 0 ? (ushort)(targetDisplay.Bounds.Height & ~1) : (ushort)(hello.NativeHeight & ~1);
-        ushort targetFps = 60;
+        ushort targetFps = hello.MaxFps >= 30 ? (ushort)Math.Clamp((int)hello.MaxFps, 30, 120) : (ushort)60;
         uint bitrateBps = hello.PreferredBitrateKbps > 0 ? (uint)hello.PreferredBitrateKbps * 1000 : 20_000_000;
         uint sessionId = (uint)Random.Shared.Next(1, int.MaxValue);
 
@@ -260,7 +260,7 @@ public sealed class SecondScreenServer : IDisposable
                         var pong = PongMessage.ReadPayloadFrom(inPayload);
                         if (rttTracker.RecordPong(pong, rttTracker.CurrentTimeUs))
                         {
-                            OnMetricsUpdated?.Invoke(rttTracker.LastRttMs, 60.0, bitrateBps / 1_000_000.0);
+                            OnMetricsUpdated?.Invoke(rttTracker.LastRttMs, targetFps, bitrateBps / 1_000_000.0);
                         }
                     }
                     else if (inHeader.MsgType == MessageType.TouchEvent)
@@ -319,6 +319,7 @@ public sealed class SecondScreenServer : IDisposable
                 SingleReader = true,
                 SingleWriter = true
             });
+        int videoInFlight = 0; // frames queued or currently on the wire
 
         var senderTask = Task.Run(async () =>
         {
@@ -329,7 +330,15 @@ public sealed class SecondScreenServer : IDisposable
                 {
                     while (reader.TryRead(out var item))
                     {
-                        await transport.SendPacketAsync(item.Header, item.Payload, sessionCts.Token).ConfigureAwait(false);
+                        try
+                        {
+                            await transport.SendPacketAsync(item.Header, item.Payload, sessionCts.Token).ConfigureAwait(false);
+                        }
+                        finally
+                        {
+                            if (item.Header.MsgType == MessageType.VideoFrame)
+                                Interlocked.Decrement(ref videoInFlight);
+                        }
                     }
                 }
             }
@@ -369,6 +378,7 @@ public sealed class SecondScreenServer : IDisposable
                 }
 
                 long targetFrameIntervalTicks = Stopwatch.Frequency / targetFps;
+                int captureTimeoutMs = Math.Max(1, 1000 / targetFps);
                 var stopwatch = Stopwatch.StartNew();
                 long nextTargetTicks = stopwatch.ElapsedTicks;
                 bool configSent = false;
@@ -376,6 +386,7 @@ public sealed class SecondScreenServer : IDisposable
                 byte[] testPatternBgra = new byte[streamWidth * streamHeight * 4];
 
                 byte[]? lastValidBgra = null;
+                bool lastValidIsNv12 = false;
 
                 while (!sessionCts.Token.IsCancellationRequested)
                 {
@@ -390,6 +401,14 @@ public sealed class SecondScreenServer : IDisposable
 
                     try
                     {
+                        // Sunshine-style backpressure: if the network is still pushing the previous frame,
+                        // skip this tick entirely (no capture, no encode). The reference chain stays intact,
+                        // so no IDR is needed and the next frame shown is always the freshest one.
+                        if (Volatile.Read(ref videoInFlight) >= 1 && frameNumber > 0)
+                        {
+                            goto Pace;
+                        }
+
                         if (Interlocked.Exchange(ref requestKeyframeFlag, 0) == 1 ||
                             frameNumber == 45 || frameNumber == 90 || frameNumber == 150)
                         {
@@ -397,19 +416,25 @@ public sealed class SecondScreenServer : IDisposable
                         }
 
                         byte[] bgraData;
+                        bool isNv12 = false;
                         ushort captureDurationUs = 0;
 
                         if (captureOk && capture.IsInitialized)
                         {
                             var capSw = Stopwatch.StartNew();
-                            var frame = capture.AcquireNextFrame(0);
+                            // Event-driven DXGI wait: wakes up the instant DWM presents a new frame
+                            var frame = capture.AcquireNextFrame(captureTimeoutMs);
                             capSw.Stop();
                             captureDurationUs = (ushort)Math.Min(capSw.Elapsed.TotalMicroseconds, ushort.MaxValue);
 
-                            if (frame != null && frame.RgbaData != null && frame.RgbaData.Length >= streamWidth * streamHeight * 4)
+                            bool gotNv12 = frame?.Nv12Data != null && frame.Width == streamWidth && frame.Height == streamHeight;
+                            bool gotBgra = frame?.RgbaData != null && frame.RgbaData.Length >= streamWidth * streamHeight * 4;
+                            if (gotNv12 || gotBgra)
                             {
-                                bgraData = frame.RgbaData;
+                                bgraData = gotNv12 ? frame!.Nv12Data! : frame!.RgbaData!;
+                                isNv12 = gotNv12;
                                 lastValidBgra = bgraData;
+                                lastValidIsNv12 = isNv12;
                                 // When DWM finishes painting the newly extended virtual desktop for the first time,
                                 // or immediately after returning from a UAC prompt, force an IDR keyframe!
                                 if (frame.ForceKeyframe || (frame.IsNew && !sawFirstNewDxgiFrame))
@@ -421,6 +446,7 @@ public sealed class SecondScreenServer : IDisposable
                             else if (lastValidBgra != null)
                             {
                                 bgraData = lastValidBgra;
+                                isNv12 = lastValidIsNv12;
                                 sawFirstNewDxgiFrame = false;
                             }
                             else
@@ -432,6 +458,7 @@ public sealed class SecondScreenServer : IDisposable
                         else if (lastValidBgra != null)
                         {
                             bgraData = lastValidBgra;
+                            isNv12 = lastValidIsNv12;
                             sawFirstNewDxgiFrame = false;
                             captureDurationUs = 500;
                         }
@@ -445,7 +472,9 @@ public sealed class SecondScreenServer : IDisposable
                         // Encode
                         var encSw = Stopwatch.StartNew();
                         bool wasHw = encoder.IsHardwareAccelerated;
-                        var encoded = encoder.EncodeBgraFrame(bgraData, frameStartUs);
+                        var encoded = isNv12
+                            ? encoder.EncodeNv12Frame(bgraData, frameStartUs) // GPU-converted, zero CPU colour work
+                            : encoder.EncodeBgraFrame(bgraData, frameStartUs);
                         encSw.Stop();
                         if (wasHw && !encoder.IsHardwareAccelerated)
                         {
@@ -468,7 +497,6 @@ public sealed class SecondScreenServer : IDisposable
                                 configSent = true;
                             }
 
-                            if (videoChannel.Reader.Count < 2 || encoded.IsKeyframe)
                             {
                                 sentFrameCount = ++frameNumber;
                                 var frameMsg = new VideoFrameMessage(
@@ -488,12 +516,11 @@ public sealed class SecondScreenServer : IDisposable
                                     timestampUs: (uint)frameStartUs,
                                     flags: frameMsg.GetFlags());
 
-                                videoChannel.Writer.TryWrite((frameHeader, framePayload));
-                            }
-                            else
-                            {
-                                // Network sender is temporarily behind; drop stale frame and request fresh IDR so decoder stays in sync
-                                encoder.RequestKeyframe();
+                                Interlocked.Increment(ref videoInFlight);
+                                if (!videoChannel.Writer.TryWrite((frameHeader, framePayload)))
+                                {
+                                    Interlocked.Decrement(ref videoInFlight);
+                                }
                             }
                         }
                     }
@@ -502,6 +529,7 @@ public sealed class SecondScreenServer : IDisposable
                         Console.WriteLine($"[SecondScreenServer] Kare işleme hatası (yoksayıldı): {frameEx.Message}");
                     }
 
+                Pace:
                     // High-precision frame rate pacing (solid 60.0 FPS)
                     long nowTicks = stopwatch.ElapsedTicks;
                     long diffTicks = nextTargetTicks - nowTicks;

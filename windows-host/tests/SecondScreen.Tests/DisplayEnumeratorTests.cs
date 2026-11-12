@@ -98,7 +98,7 @@ public class DisplayEnumeratorTests
 
         var initialFrame = engine.AcquireNextFrame(16);
         Assert.NotNull(initialFrame);
-        Assert.NotNull(initialFrame!.RgbaData);
+        Assert.NotNull(initialFrame!.RgbaData ?? initialFrame.Nv12Data); // GPU path yields NV12, GDI/CPU path yields BGRA
 
         // Simulate UAC / Winlogon secure desktop switch dropping DXGI duplication
         engine.SimulateDesktopSwitchOrUac();
@@ -109,12 +109,12 @@ public class DisplayEnumeratorTests
         // Immediate call during UAC throttle window must return cached frame without throwing or returning null
         var duringUacFrame = engine.AcquireNextFrame(0);
         Assert.NotNull(duringUacFrame);
-        Assert.NotNull(duringUacFrame!.RgbaData);
+        Assert.NotNull(duringUacFrame!.RgbaData ?? duringUacFrame.Nv12Data); // GPU path yields NV12, GDI/CPU path yields BGRA
 
         // After 250ms (UAC dismissed), AcquireNextFrame must automatically re-initialize DXGI and resume live capture
         System.Threading.Thread.Sleep(250);
         var recoveredFrame = engine.AcquireNextFrame(50);
         Assert.NotNull(recoveredFrame);
-        Assert.NotNull(recoveredFrame!.RgbaData);
+        Assert.NotNull(recoveredFrame!.RgbaData ?? recoveredFrame.Nv12Data); // GPU path yields NV12, GDI/CPU path yields BGRA
     }
 }

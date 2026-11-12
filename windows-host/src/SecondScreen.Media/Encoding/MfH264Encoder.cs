@@ -215,11 +215,14 @@ public sealed class MfH264Encoder : IDisposable
                         CodecApiGuids.TrySet(codecApi, CodecApiGuids.NumWorkerThreads, (uint)Math.Clamp(Environment.ProcessorCount, 4, 16));
                         CodecApiGuids.TrySet(codecApi, CodecApiGuids.RateControlMode, (uint)0);
                         CodecApiGuids.TrySet(codecApi, CodecApiGuids.MeanBitRate, (uint)_bitrateBps);
-                        CodecApiGuids.TrySet(codecApi, CodecApiGuids.MaxBitRate, (uint)(_bitrateBps * 12 / 10));
-                        uint bufSize = (uint)(_bitrateBps / 8 / _fps * 2);
+                        // Sunshine-style strict CBR: VBV = exactly one frame, so no frame can exceed
+                        // its per-frame budget and queue up in the network pipe.
+                        CodecApiGuids.TrySet(codecApi, CodecApiGuids.MaxBitRate, (uint)_bitrateBps);
+                        uint bufSize = (uint)(_bitrateBps / _fps); // VBV size is in bits
                         CodecApiGuids.TrySet(codecApi, CodecApiGuids.BufferSize, bufSize);
                         CodecApiGuids.TrySet(codecApi, CodecApiGuids.AdaptiveMode, (uint)0);
-                        CodecApiGuids.TrySet(codecApi, CodecApiGuids.GopSize, (uint)120);
+                        // Long GOP: IDRs only on demand (client KEYFRAME_REQ) to avoid periodic bitrate spikes
+                        CodecApiGuids.TrySet(codecApi, CodecApiGuids.GopSize, (uint)(_fps * 10));
                     }
                 }
             }
@@ -293,6 +296,45 @@ public sealed class MfH264Encoder : IDisposable
             WriteBgraToReusableInputBuffer(bgra, timestampUs);
             return EncodePreparedSample();
         }
+    }
+
+    /// <summary>Encodes an already GPU-converted, tightly packed NV12 frame (no CPU colour conversion).</summary>
+    public unsafe EncodedPacket? EncodeNv12Frame(ReadOnlySpan<byte> nv12, long timestampUs)
+    {
+        if (_encoder == null || _reusableInBuffer == null || _reusableInSample == null || _reusableOutBuffer == null || _reusableOutSample == null)
+            return null;
+        if (nv12.Length < _nv12Size)
+            throw new ArgumentException($"NV12 buffer too small: {nv12.Length} < {_nv12Size}", nameof(nv12));
+
+        WriteNv12ToReusableInputBuffer(nv12, timestampUs);
+        try
+        {
+            return EncodePreparedSample();
+        }
+        catch (Exception ex) when (IsHardwareAccelerated)
+        {
+            InitializeInternal(_width, _height, _fps, _bitrateBps, forceCpuOnly: true, fallbackReason: ex.Message);
+            WriteNv12ToReusableInputBuffer(nv12, timestampUs);
+            return EncodePreparedSample();
+        }
+    }
+
+    private unsafe void WriteNv12ToReusableInputBuffer(ReadOnlySpan<byte> nv12, long timestampUs)
+    {
+        if (_reusableInBuffer == null || _reusableInSample == null) return;
+
+        _reusableInBuffer.Lock(out IntPtr pData, out _, out _);
+        try
+        {
+            nv12[.._nv12Size].CopyTo(new Span<byte>(pData.ToPointer(), _nv12Size));
+        }
+        finally
+        {
+            _reusableInBuffer.Unlock();
+        }
+        _reusableInBuffer.CurrentLength = _nv12Size;
+        _reusableInSample.SampleTime = timestampUs * 10;
+        _reusableInSample.SampleDuration = (10_000_000 / _fps);
     }
 
     private unsafe void WriteBgraToReusableInputBuffer(ReadOnlySpan<byte> bgra, long timestampUs)

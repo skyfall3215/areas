@@ -9,6 +9,8 @@ namespace SecondScreen.Media.Capture;
 public sealed class CapturedFrame
 {
     public byte[]? RgbaData { get; init; }
+    /// <summary>Tightly packed NV12 (GPU-converted). When set, RgbaData is null.</summary>
+    public byte[]? Nv12Data { get; init; }
     public int Width { get; init; }
     public int Height { get; init; }
     public long TimestampUs { get; init; }
@@ -18,10 +20,24 @@ public sealed class CapturedFrame
 
 public sealed class DxgiScreenCapture : IDisposable
 {
+    private const int CursorPatchSize = 192; // covers the 96x96 GDI cursor canvas for any hotspot
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool GetCursorPos(out System.Drawing.Point lpPoint);
+
     private ID3D11Device? _device;
     private ID3D11DeviceContext? _context;
     private IDXGIOutputDuplication? _duplication;
     private ID3D11Texture2D? _stagingTexture;
+    // GPU NV12 path (Sunshine-style): persistent desktop copy + video processor
+    private ID3D11Texture2D? _desktopCopy;
+    private ID3D11Texture2D? _cursorStaging;
+    private GpuNv12Converter? _gpu;
+    private byte[]? _nv12Data;
+    private byte[]? _cursorPatchBgra;
+    private byte[]? _cursorPatchNv12;
+    private bool _hasGpuFrame;
+    private bool _gpuDisabled;
     private string? _targetDeviceName;
     private int _outputIndex;
     private int _width;
@@ -47,6 +63,13 @@ public sealed class DxgiScreenCapture : IDisposable
     /// </summary>
     public void ReleaseDuplicationObjects()
     {
+        try { _gpu?.Dispose(); } catch { }
+        _gpu = null;
+        try { _desktopCopy?.Dispose(); } catch { }
+        _desktopCopy = null;
+        try { _cursorStaging?.Dispose(); } catch { }
+        _cursorStaging = null;
+        _hasGpuFrame = false;
         try { _stagingTexture?.Dispose(); } catch { }
         _stagingTexture = null;
         try { _duplication?.Dispose(); } catch { }
@@ -120,7 +143,7 @@ public sealed class DxgiScreenCapture : IDisposable
                                     FeatureLevel.Level_11_0
                                 };
 
-                                var createFlags = DeviceCreationFlags.BgraSupport;
+                                var createFlags = DeviceCreationFlags.BgraSupport | DeviceCreationFlags.VideoSupport;
                                 var hr = D3D11.D3D11CreateDevice(
                                     adapter,
                                     DriverType.Unknown,
@@ -128,6 +151,10 @@ public sealed class DxgiScreenCapture : IDisposable
                                     featureLevels,
                                     out device,
                                     out context);
+                                if (hr.Failure)
+                                {
+                                    hr = D3D11.D3D11CreateDevice(adapter, DriverType.Unknown, DeviceCreationFlags.BgraSupport, featureLevels, out device, out context);
+                                }
 
                                 if (hr.Failure || device == null || context == null)
                                 {
@@ -187,6 +214,7 @@ public sealed class DxgiScreenCapture : IDisposable
                                 };
 
                                 _stagingTexture = _device.CreateTexture2D(textureDesc);
+                                TryInitGpuPath();
                                 return true;
                             }
                             catch (Exception ex)
@@ -243,12 +271,12 @@ public sealed class DxgiScreenCapture : IDisposable
                 long nowTicks = Stopwatch.GetTimestamp();
                 if (nowTicks - _lastInitAttemptTicks < Stopwatch.Frequency / 5)
                 {
-                    return GetCachedFrameWithCursor();
+                    return CachedFrame();
                 }
 
                 if (!Initialize(_targetDeviceName, _outputIndex))
                 {
-                    return GetCachedFrameWithCursor();
+                    return CachedFrame();
                 }
 
                 // Give the newly re-attached duplication session up to 8ms to latch the desktop surface
@@ -267,7 +295,7 @@ public sealed class DxgiScreenCapture : IDisposable
 
             if (result == DxgiResultCode.WaitTimeout)
             {
-                return GetCachedFrameWithCursor();
+                return CachedFrame();
             }
 
             if (result.Failure || desktopResource == null)
@@ -281,7 +309,7 @@ public sealed class DxgiScreenCapture : IDisposable
                     ReleaseDuplicationObjects();
                     _lastInitAttemptTicks = Stopwatch.GetTimestamp();
                 }
-                return GetCachedFrameWithCursor();
+                return CachedFrame();
             }
 
             using (desktopResource)
@@ -290,7 +318,17 @@ public sealed class DxgiScreenCapture : IDisposable
                 if (desktopTexture == null)
                 {
                     try { _duplication.ReleaseFrame(); } catch { }
-                    return GetCachedFrameWithCursor();
+                    return CachedFrame();
+                }
+
+                if (_gpu != null && _desktopCopy != null)
+                {
+                    // GPU path: keep a persistent copy of the desktop on the GPU, convert to NV12 there
+                    _context!.CopyResource(_desktopCopy, desktopTexture);
+                    try { _duplication.ReleaseFrame(); } catch { }
+                    _hasGpuFrame = true;
+                    _lastPresentTimeUs = (long)(frameInfo.LastPresentTime / 10);
+                    return BuildGpuFrame();
                 }
 
                 _context!.CopyResource(_stagingTexture!, desktopTexture);
@@ -375,11 +413,171 @@ public sealed class DxgiScreenCapture : IDisposable
             Console.WriteLine($"[DxgiScreenCapture] Kare yakalama istisnası (otomatik kurtarılıyor): {ex.Message}");
             ReleaseDuplicationObjects();
             _lastInitAttemptTicks = Stopwatch.GetTimestamp();
-            return GetCachedFrameWithCursor();
+            return CachedFrame();
         }
     }
 
     private System.Drawing.Rectangle _lastCursorRect;
+
+    private void TryInitGpuPath()
+    {
+        if (_gpuDisabled || _device == null || _context == null) return;
+        try
+        {
+            _desktopCopy = _device.CreateTexture2D(new Texture2DDescription
+            {
+                Width = (uint)_width,
+                Height = (uint)_height,
+                MipLevels = 1,
+                ArraySize = 1,
+                Format = Format.B8G8R8A8_UNorm,
+                SampleDescription = new SampleDescription(1, 0),
+                Usage = ResourceUsage.Default,
+                BindFlags = BindFlags.RenderTarget | BindFlags.ShaderResource
+            });
+
+            int patch = Math.Min(CursorPatchSize, Math.Min(_width, _height)) & ~1;
+            _cursorStaging = _device.CreateTexture2D(new Texture2DDescription
+            {
+                Width = (uint)patch,
+                Height = (uint)patch,
+                MipLevels = 1,
+                ArraySize = 1,
+                Format = Format.B8G8R8A8_UNorm,
+                SampleDescription = new SampleDescription(1, 0),
+                Usage = ResourceUsage.Staging,
+                CPUAccessFlags = CpuAccessFlags.Read
+            });
+
+            _gpu = GpuNv12Converter.TryCreate(_device, _context, _desktopCopy, _width, _height, out var err);
+            if (_gpu == null)
+            {
+                Console.WriteLine($"[DxgiScreenCapture] GPU NV12 dönüşümü kullanılamıyor, CPU yolu: {err}");
+                _gpuDisabled = true; // don't retry on every UAC re-init
+                _desktopCopy.Dispose(); _desktopCopy = null;
+                _cursorStaging.Dispose(); _cursorStaging = null;
+                return;
+            }
+
+            int nv12Size = _width * _height * 3 / 2;
+            if (_nv12Data == null || _nv12Data.Length != nv12Size) _nv12Data = new byte[nv12Size];
+            _cursorPatchBgra = new byte[patch * patch * 4];
+            _cursorPatchNv12 = new byte[patch * patch * 3 / 2];
+            Console.WriteLine("[DxgiScreenCapture] GPU BGRA->NV12 (D3D11 Video Processor) devrede");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[DxgiScreenCapture] GPU yolu başlatılamadı, CPU yolu: {ex.Message}");
+            _gpuDisabled = true;
+            try { _gpu?.Dispose(); } catch { }
+            _gpu = null;
+            try { _desktopCopy?.Dispose(); } catch { }
+            _desktopCopy = null;
+            try { _cursorStaging?.Dispose(); } catch { }
+            _cursorStaging = null;
+        }
+    }
+
+    private CapturedFrame? CachedFrame()
+    {
+        if (_gpu != null && _hasGpuFrame)
+            return BuildGpuFrame();
+
+        // GPU objects lost (UAC / mode switch): repeat last NV12 frame as-is
+        if (_gpu == null && !_gpuDisabled && _lastNv12Valid && _nv12Data != null)
+        {
+            return new CapturedFrame { Nv12Data = _nv12Data, Width = _width, Height = _height, TimestampUs = _lastPresentTimeUs };
+        }
+
+        return GetCachedFrameWithCursor();
+    }
+
+    private bool _lastNv12Valid;
+
+    private unsafe CapturedFrame BuildGpuFrame()
+    {
+        _gpu!.Convert(_nv12Data);
+
+        bool wasVisibleBefore = _hasVisibleDesktop;
+        if (!_hasVisibleDesktop)
+        {
+            // Black in limited-range Y is 16; any brighter sample means DWM has painted the desktop
+            int ySize = _width * _height;
+            int stride = Math.Max(64, ySize / 4096);
+            for (int i = 0; i < ySize; i += stride)
+            {
+                if (_nv12Data![i] > 20) { _hasVisibleDesktop = true; break; }
+            }
+        }
+
+        try { OverlayCursorNv12(); } catch { }
+        _lastNv12Valid = true;
+
+        return new CapturedFrame
+        {
+            Nv12Data = _nv12Data,
+            Width = _width,
+            Height = _height,
+            TimestampUs = _lastPresentTimeUs,
+            IsNew = _hasVisibleDesktop,
+            ForceKeyframe = !wasVisibleBefore && _hasVisibleDesktop
+        };
+    }
+
+    /// <summary>
+    /// Reads back only a small BGRA patch around the cursor, draws the real Windows cursor on it with GDI,
+    /// converts that patch to NV12 and splices it into the frame (~0.1 ms).
+    /// </summary>
+    private unsafe void OverlayCursorNv12()
+    {
+        if (_cursorStaging == null || _desktopCopy == null || _cursorPatchBgra == null || _cursorPatchNv12 == null || _nv12Data == null)
+            return;
+        if (!GetCursorPos(out var pt)) return;
+
+        int patch = (int)_cursorStaging.Description.Width;
+        int relX = pt.X - _originX;
+        int relY = pt.Y - _originY;
+        if (relX < -patch / 2 || relX >= _width + patch / 2 || relY < -patch / 2 || relY >= _height + patch / 2) return;
+
+        int px = Math.Clamp(relX - patch / 2, 0, _width - patch) & ~1;
+        int py = Math.Clamp(relY - patch / 2, 0, _height - patch) & ~1;
+
+        _context!.CopySubresourceRegion(_cursorStaging, 0, 0, 0, 0, _desktopCopy, 0,
+            new Vortice.Mathematics.Box(px, py, 0, px + patch, py + patch, 1));
+
+        var mapped = _context.Map(_cursorStaging, 0, MapMode.Read, Vortice.Direct3D11.MapFlags.None);
+        try
+        {
+            byte* src = (byte*)mapped.DataPointer;
+            int pitch = (int)mapped.RowPitch;
+            fixed (byte* dst = _cursorPatchBgra)
+            {
+                for (int y = 0; y < patch; y++)
+                    Buffer.MemoryCopy(src + (long)y * pitch, dst + y * patch * 4, patch * 4, patch * 4);
+            }
+        }
+        finally
+        {
+            _context.Unmap(_cursorStaging, 0);
+        }
+
+        GdiScreenCapture.DrawCursorOntoBgraBuffer(_cursorPatchBgra, patch, patch, _originX + px, _originY + py, out var drawn);
+        if (drawn.Width <= 0 || drawn.Height <= 0) return;
+
+        Encoding.ColorConverter.BgraToNv12(_cursorPatchBgra, _cursorPatchNv12, patch, patch);
+
+        fixed (byte* pFrame = _nv12Data)
+        fixed (byte* pPatch = _cursorPatchNv12)
+        {
+            for (int y = 0; y < patch; y++)
+                Buffer.MemoryCopy(pPatch + y * patch, pFrame + (long)(py + y) * _width + px, patch, patch);
+
+            byte* frameUv = pFrame + (long)_width * _height;
+            byte* patchUv = pPatch + patch * patch;
+            for (int y = 0; y < patch / 2; y++)
+                Buffer.MemoryCopy(patchUv + y * patch, frameUv + (long)(py / 2 + y) * _width + px, patch, patch);
+        }
+    }
 
     private unsafe void RestoreLastCursorPatch()
     {
