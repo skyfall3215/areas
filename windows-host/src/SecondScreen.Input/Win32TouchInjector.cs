@@ -222,10 +222,14 @@ public sealed class Win32TouchInjector : ITouchInjector
             }
 
             // 3. Clicks (LeftClick, RightClick, DoubleClick, Legacy Scroll)
+            // ContactRadius == 1 means trackpad mode: act at the current cursor position without jumping.
             if (primary.Action is TouchAction.LeftClick or TouchAction.RightClick or TouchAction.DoubleClick or TouchAction.Scroll)
             {
-                var pixel = TouchCoordinateMapper.NormalizeToScreen(primary.NormalizedX, primary.NormalizedY, _screenBounds);
-                SetCursorPos(pixel.X, pixel.Y);
+                if (primary.ContactRadius == 0)
+                {
+                    var pixel = TouchCoordinateMapper.NormalizeToScreen(primary.NormalizedX, primary.NormalizedY, _screenBounds);
+                    SetCursorPos(pixel.X, pixel.Y);
+                }
 
                 switch (primary.Action)
                 {
@@ -258,8 +262,11 @@ public sealed class Win32TouchInjector : ITouchInjector
             try
             {
                 primary = touchEvent.Pointers[0];
-                var pixel = TouchCoordinateMapper.NormalizeToScreen(primary.NormalizedX, primary.NormalizedY, _screenBounds);
-                SetCursorPos(pixel.X, pixel.Y);
+                if (primary.ContactRadius == 0)
+                {
+                    var pixel = TouchCoordinateMapper.NormalizeToScreen(primary.NormalizedX, primary.NormalizedY, _screenBounds);
+                    SetCursorPos(pixel.X, pixel.Y);
+                }
 
                 switch (primary.Action)
                 {

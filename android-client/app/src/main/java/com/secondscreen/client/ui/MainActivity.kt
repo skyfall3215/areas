@@ -96,6 +96,9 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
     private var lastTouchY = 0f
     private var isDragging = false
     private var isTapCandidate = false
+    private var lastTapUpTime = 0L
+    private var lastTrackpadMoveTime = 0L
+    private var longPressJob: Job? = null
     private var lastTwoFingerX = 0f
     private var lastTwoFingerY = 0f
     private var isTwoFingerScroll = false
@@ -356,6 +359,13 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
         // 1. Üç Parmakla Dokunma -> Sanal Klavyeyi Aç/Kapat (Moonlight Mantığı)
         if (pointerCount == 3) {
+            longPressJob?.cancel()
+            if (isDragging) {
+                isDragging = false
+                touchChannel.trySend(
+                    TouchEventMessage(1, 0, listOf(PointerEntry(0, TouchAction.UP, 0, 0, 1)))
+                )
+            }
             if (actionMasked == MotionEvent.ACTION_POINTER_DOWN && event.actionIndex == 2) {
                 toggleSoftKeyboard()
                 binding.root.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
@@ -366,7 +376,13 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
         // 2. İki Parmak Hareketleri (Moonlight: 2 Parmakla Çift Tıklama & 2 Boyutlu Kaydırma)
         if (pointerCount == 2) {
-            isDragging = false
+            longPressJob?.cancel()
+            if (isDragging) {
+                isDragging = false
+                touchChannel.trySend(
+                    TouchEventMessage(1, 0, listOf(PointerEntry(0, TouchAction.UP, 0, 0, 1)))
+                )
+            }
             isTapCandidate = false
 
             when (actionMasked) {
@@ -426,17 +442,18 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                             twoFingerDownMidX, twoFingerDownMidY, viewWidth, viewHeight, lastStreamWidth, lastStreamHeight
                         )
                         coords?.let {
+                            val useCurrentCursor = if (SystemClock.uptimeMillis() - lastTrackpadMoveTime < 4000L) 1 else 0
                             touchChannel.trySend(
                                 TouchEventMessage(
                                     pointerCount = 1,
                                     changedIndex = 0,
                                     pointers = listOf(
-                                        PointerEntry(0, TouchAction.DOUBLE_CLICK, it.first, it.second)
+                                        PointerEntry(0, TouchAction.DOUBLE_CLICK, it.first, it.second, useCurrentCursor)
                                     )
                                 )
                             )
                             binding.root.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
-                            Log.d("SecondScreenTouch", "Two-Finger Tap -> Double Click at (${it.first}, ${it.second})")
+                            Log.d("SecondScreenTouch", "Two-Finger Tap -> Double Click at (${it.first}, ${it.second}) cursorOnly=$useCurrentCursor")
                         }
                     }
                 }
@@ -448,13 +465,55 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
         if (pointerCount == 1) {
             when (actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    touchDownTime = SystemClock.uptimeMillis()
+                    val now = SystemClock.uptimeMillis()
+                    touchDownTime = now
                     touchDownX = event.x
                     touchDownY = event.y
                     lastTouchX = event.x
                     lastTouchY = event.y
-                    isTapCandidate = true
-                    isDragging = false
+                    longPressJob?.cancel()
+
+                    // Çift dokunup basılı tutma (Moonlight Drag): Sol tuşu basılı tutarak sürükle
+                    if (now - lastTapUpTime < 260L) {
+                        isDragging = true
+                        isTapCandidate = false
+                        touchChannel.trySend(
+                            TouchEventMessage(
+                                pointerCount = 1,
+                                changedIndex = 0,
+                                pointers = listOf(PointerEntry(0, TouchAction.DOWN, 0, 0, 1))
+                            )
+                        )
+                        binding.root.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                    } else {
+                        isDragging = false
+                        isTapCandidate = true
+                        val downX = event.x
+                        val downY = event.y
+                        longPressJob = lifecycleScope.launch {
+                            delay(450L)
+                            if (isTapCandidate && !isDragging) {
+                                isTapCandidate = false
+                                val coords = TouchCoordinateMapper.mapTouchToNormalized(
+                                    downX, downY, viewWidth, viewHeight, lastStreamWidth, lastStreamHeight
+                                )
+                                coords?.let {
+                                    val useCurrentCursor = if (SystemClock.uptimeMillis() - lastTrackpadMoveTime < 4000L) 1 else 0
+                                    touchChannel.trySend(
+                                        TouchEventMessage(
+                                            pointerCount = 1,
+                                            changedIndex = 0,
+                                            pointers = listOf(
+                                                PointerEntry(0, TouchAction.RIGHT_CLICK, it.first, it.second, useCurrentCursor)
+                                            )
+                                        )
+                                    )
+                                    binding.root.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                                    Log.d("SecondScreenTouch", "Long Press -> Right Click at (${it.first}, ${it.second}) cursorOnly=$useCurrentCursor")
+                                }
+                            }
+                        }
+                    }
                     return true
                 }
                 MotionEvent.ACTION_MOVE -> {
@@ -462,9 +521,10 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                     val dyFromDown = event.y - touchDownY
                     val distSq = dxFromDown * dxFromDown + dyFromDown * dyFromDown
 
-                    // 12 piksel deadzone aşıldığında touchpad gibi imleci hareket ettir
-                    if (distSq > 144f) {
+                    // 12 piksel deadzone aşıldığında touchpad gibi imleci hareket ettir (sürükleme modunda da çalışır)
+                    if (isDragging || distSq > 144f) {
                         isTapCandidate = false
+                        longPressJob?.cancel()
 
                         val stepDx = event.x - lastTouchX
                         val stepDy = event.y - lastTouchY
@@ -477,6 +537,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                         val deltaY = (stepDy * scaleY).toInt()
 
                         if (deltaX != 0 || deltaY != 0) {
+                            lastTrackpadMoveTime = SystemClock.uptimeMillis()
                             touchChannel.trySend(
                                 TouchEventMessage(
                                     pointerCount = 1,
@@ -494,28 +555,40 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                     return true
                 }
                 MotionEvent.ACTION_UP -> {
-                    val duration = SystemClock.uptimeMillis() - touchDownTime
+                    longPressJob?.cancel()
+                    val now = SystemClock.uptimeMillis()
+                    val duration = now - touchDownTime
                     val dxFromDown = event.x - touchDownX
                     val dyFromDown = event.y - touchDownY
                     val distSq = dxFromDown * dxFromDown + dyFromDown * dyFromDown
 
-                    // Tek parmakla hızlı dokunup bırakma (< 300 ms, hareket yok) = SOL TIK (Tıklama)!
-                    if (isTapCandidate && duration < 300 && distSq < 144f) {
+                    if (isDragging) {
+                        touchChannel.trySend(
+                            TouchEventMessage(
+                                pointerCount = 1,
+                                changedIndex = 0,
+                                pointers = listOf(PointerEntry(0, TouchAction.UP, 0, 0, 1))
+                            )
+                        )
+                    } else if (isTapCandidate && duration < 300 && distSq < 144f) {
+                        // Tek parmakla hızlı dokunup bırakma (< 300 ms, hareket yok) = SOL TIK
                         val coords = TouchCoordinateMapper.mapTouchToNormalized(
                             event.x, event.y, viewWidth, viewHeight, lastStreamWidth, lastStreamHeight
                         )
                         coords?.let {
+                            val useCurrentCursor = if (now - lastTrackpadMoveTime < 4000L) 1 else 0
                             touchChannel.trySend(
                                 TouchEventMessage(
                                     pointerCount = 1,
                                     changedIndex = 0,
                                     pointers = listOf(
-                                        PointerEntry(0, TouchAction.LEFT_CLICK, it.first, it.second)
+                                        PointerEntry(0, TouchAction.LEFT_CLICK, it.first, it.second, useCurrentCursor)
                                     )
                                 )
                             )
+                            lastTapUpTime = now
                             binding.root.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
-                            Log.d("SecondScreenTouch", "Single Tap -> Left Click at (${it.first}, ${it.second})")
+                            Log.d("SecondScreenTouch", "Single Tap -> Left Click at (${it.first}, ${it.second}) cursorOnly=$useCurrentCursor")
                         }
                     }
                     isTapCandidate = false
@@ -523,6 +596,16 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                     return true
                 }
                 MotionEvent.ACTION_CANCEL -> {
+                    longPressJob?.cancel()
+                    if (isDragging) {
+                        touchChannel.trySend(
+                            TouchEventMessage(
+                                pointerCount = 1,
+                                changedIndex = 0,
+                                pointers = listOf(PointerEntry(0, TouchAction.UP, 0, 0, 1))
+                            )
+                        )
+                    }
                     isTapCandidate = false
                     isDragging = false
                     return true
