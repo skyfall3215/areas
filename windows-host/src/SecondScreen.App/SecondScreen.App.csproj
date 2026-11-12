@@ -8,6 +8,10 @@
     <ProjectReference Include="..\SecondScreen.Display\SecondScreen.Display.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Include="..\..\..\assets\logo.png" Link="assets\logo.png" CopyToOutputDirectory="PreserveNewest" Condition="Exists('..\..\..\assets\logo.png')" />
+  </ItemGroup>
+
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>

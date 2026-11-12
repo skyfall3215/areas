@@ -78,9 +78,8 @@ public sealed class ServerDashboardForm : Form
         ForeColor = Color.FromArgb(240, 240, 245);
         Font = new Font("Segoe UI", 9.5f, FontStyle.Regular);
 
-        string icoPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "app.ico");
-        if (!File.Exists(icoPath)) icoPath = @"D:\Areas\areas.ico";
-        if (File.Exists(icoPath)) Icon = new Icon(icoPath);
+        string? icoPath = ResolveAssetPath("app.ico", "areas.ico");
+        if (icoPath != null) Icon = new Icon(icoPath);
 
         // Main Layout Container
         var pnlMain = new TableLayoutPanel
@@ -101,8 +100,8 @@ public sealed class ServerDashboardForm : Form
         // 0. Header (Logo, Titles, Status Badge)
         var pnlHeader = new Panel { Dock = DockStyle.Fill };
         
-        string logoPath = @"D:\Areas\docs\assets\logo.png";
-        if (File.Exists(logoPath))
+        string? logoPath = ResolveAssetPath(Path.Combine("assets", "logo.png"), "logo.png");
+        if (logoPath != null)
         {
             var pbLogo = new PictureBox
             {
@@ -721,5 +720,20 @@ public sealed class ServerDashboardForm : Form
         btn.FlatAppearance.BorderSize = 0;
         btn.Click += onClick;
         return btn;
+    }
+
+    private static string? ResolveAssetPath(params string[] relativePaths)
+    {
+        var dir = new DirectoryInfo(AppDomain.CurrentDomain.BaseDirectory);
+        for (int depth = 0; depth < 6 && dir != null; depth++, dir = dir.Parent)
+        {
+            foreach (string rel in relativePaths)
+            {
+                string candidate = Path.Combine(dir.FullName, rel);
+                if (File.Exists(candidate))
+                    return candidate;
+            }
+        }
+        return null;
     }
 }
