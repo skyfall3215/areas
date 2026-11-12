@@ -206,6 +206,18 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
             cancelActiveSession()
         }
 
+        binding.btnDockCollapse.setOnClickListener {
+            val isExpanded = binding.dockContentGroup.visibility == View.VISIBLE
+            if (isExpanded) {
+                binding.dockContentGroup.visibility = View.GONE
+                binding.btnDockCollapse.text = "◀"
+                setStatsMenuVisible(false)
+            } else {
+                binding.dockContentGroup.visibility = View.VISIBLE
+                binding.btnDockCollapse.text = "▶"
+            }
+        }
+
         binding.btnToggleKeyboard.setOnClickListener {
             Log.d("SecondScreenTouch", "btnToggleKeyboard clicked by user!")
             toggleSoftKeyboard()

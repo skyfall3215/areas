@@ -240,7 +240,7 @@
         android:layout_marginBottom="76dp"
         android:background="@drawable/bg_stats_panel"
         android:elevation="12dp"
-        android:minWidth="260dp"
+        android:minWidth="310dp"
         android:orientation="vertical"
         android:paddingStart="16dp"
         android:paddingTop="12dp"
@@ -258,8 +258,11 @@
                 android:id="@+id/txtHudHeader"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
+                android:layout_marginEnd="10dp"
                 android:layout_weight="1"
+                android:ellipsize="end"
                 android:fontFamily="monospace"
+                android:singleLine="true"
                 android:text="📊 İSTATİSTİKLER &amp; TELEMETRİ"
                 android:textColor="#A78BFA"
                 android:textSize="11sp"
@@ -390,7 +393,7 @@
         android:importantForAutofill="no"
         android:inputType="textNoSuggestions|textMultiLine" />
 
-    <!-- Compact Floating Control Dock (Bottom-Right): Keyboard + Stats Toggle + Disconnect/Exit -->
+    <!-- Compact Floating Control Dock (Bottom-Right): Collapsible Keyboard + Stats Toggle + Disconnect/Exit -->
     <LinearLayout
         android:id="@+id/floatingControlDock"
         android:layout_width="wrap_content"
@@ -401,75 +404,105 @@
         android:elevation="12dp"
         android:gravity="center_vertical"
         android:orientation="horizontal"
-        android:paddingStart="6dp"
+        android:paddingStart="4dp"
         android:paddingTop="4dp"
-        android:paddingEnd="6dp"
+        android:paddingEnd="4dp"
         android:paddingBottom="4dp"
         android:visibility="gone">
 
-        <!-- Virtual Keyboard Button -->
+        <LinearLayout
+            android:id="@+id/dockContentGroup"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <!-- Virtual Keyboard Button -->
+            <Button
+                android:id="@+id/btnToggleKeyboard"
+                android:layout_width="42dp"
+                android:layout_height="40dp"
+                android:backgroundTint="#00000000"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:padding="0dp"
+                android:stateListAnimator="@null"
+                android:text="⌨"
+                android:textColor="@color/white"
+                android:textSize="18sp" />
+
+            <View
+                android:layout_width="1dp"
+                android:layout_height="22dp"
+                android:layout_marginStart="2dp"
+                android:layout_marginEnd="2dp"
+                android:background="#33FFFFFF" />
+
+            <!-- Statistics Menu Toggle Button -->
+            <Button
+                android:id="@+id/btnToggleStats"
+                android:layout_width="wrap_content"
+                android:layout_height="40dp"
+                android:backgroundTint="#00000000"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:minWidth="0dp"
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp"
+                android:stateListAnimator="@null"
+                android:text="📊 İstatistik"
+                android:textAllCaps="false"
+                android:textColor="#E2E8F0"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+
+            <View
+                android:layout_width="1dp"
+                android:layout_height="22dp"
+                android:layout_marginStart="2dp"
+                android:layout_marginEnd="2dp"
+                android:background="#33FFFFFF" />
+
+            <!-- Exit / Disconnect Button -->
+            <Button
+                android:id="@+id/btnDisconnectStream"
+                android:layout_width="wrap_content"
+                android:layout_height="40dp"
+                android:backgroundTint="#00000000"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:minWidth="0dp"
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp"
+                android:stateListAnimator="@null"
+                android:text="✕ Çıkış"
+                android:textAllCaps="false"
+                android:textColor="#F87171"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+
+            <View
+                android:layout_width="1dp"
+                android:layout_height="22dp"
+                android:layout_marginStart="2dp"
+                android:layout_marginEnd="2dp"
+                android:background="#33FFFFFF" />
+        </LinearLayout>
+
+        <!-- Collapse / Expand Dock Button (so taskbar clock & date stay visible) -->
         <Button
-            android:id="@+id/btnToggleKeyboard"
-            android:layout_width="42dp"
-            android:layout_height="40dp"
+            android:id="@+id/btnDockCollapse"
+            android:layout_width="34dp"
+            android:layout_height="36dp"
             android:backgroundTint="#00000000"
             android:insetTop="0dp"
             android:insetBottom="0dp"
+            android:minWidth="0dp"
             android:padding="0dp"
             android:stateListAnimator="@null"
-            android:text="⌨"
-            android:textColor="@color/white"
-            android:textSize="18sp" />
-
-        <View
-            android:layout_width="1dp"
-            android:layout_height="22dp"
-            android:layout_marginStart="2dp"
-            android:layout_marginEnd="2dp"
-            android:background="#33FFFFFF" />
-
-        <!-- Statistics Menu Toggle Button -->
-        <Button
-            android:id="@+id/btnToggleStats"
-            android:layout_width="wrap_content"
-            android:layout_height="40dp"
-            android:backgroundTint="#00000000"
-            android:insetTop="0dp"
-            android:insetBottom="0dp"
-            android:minWidth="0dp"
-            android:paddingStart="10dp"
-            android:paddingEnd="10dp"
-            android:stateListAnimator="@null"
-            android:text="📊 İstatistik"
-            android:textAllCaps="false"
-            android:textColor="#E2E8F0"
-            android:textSize="12sp"
-            android:textStyle="bold" />
-
-        <View
-            android:layout_width="1dp"
-            android:layout_height="22dp"
-            android:layout_marginStart="2dp"
-            android:layout_marginEnd="2dp"
-            android:background="#33FFFFFF" />
-
-        <!-- Exit / Disconnect Button -->
-        <Button
-            android:id="@+id/btnDisconnectStream"
-            android:layout_width="wrap_content"
-            android:layout_height="40dp"
-            android:backgroundTint="#00000000"
-            android:insetTop="0dp"
-            android:insetBottom="0dp"
-            android:minWidth="0dp"
-            android:paddingStart="10dp"
-            android:paddingEnd="10dp"
-            android:stateListAnimator="@null"
-            android:text="✕ Çıkış"
-            android:textAllCaps="false"
-            android:textColor="#F87171"
-            android:textSize="12sp"
-            android:textStyle="bold" />
+            android:text="▶"
+            android:textColor="#94A3B8"
+            android:textSize="13sp" />
 
     </LinearLayout>
 

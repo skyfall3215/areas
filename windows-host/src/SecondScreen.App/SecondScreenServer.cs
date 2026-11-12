@@ -468,7 +468,7 @@ public sealed class SecondScreenServer : IDisposable
                                 configSent = true;
                             }
 
-                            if (videoChannel.Reader.Count < 4 || encoded.IsKeyframe)
+                            if (videoChannel.Reader.Count < 2 || encoded.IsKeyframe)
                             {
                                 sentFrameCount = ++frameNumber;
                                 var frameMsg = new VideoFrameMessage(
