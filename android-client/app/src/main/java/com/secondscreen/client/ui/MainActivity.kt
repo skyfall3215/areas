@@ -1012,7 +1012,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
             }
 
             // ---- bounded hand-off between reader and decoder ----
-            val decodeQueue = Channel<DecodeItem>(capacity = 4)
+            val decodeQueue = Channel<DecodeItem>(capacity = 16)
             val decodeDispatcher = java.util.concurrent.Executors
                 .newSingleThreadExecutor { r -> Thread(r, "AreasDecode") }
                 .asCoroutineDispatcher()
