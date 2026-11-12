@@ -28,7 +28,6 @@ public sealed class MfH264Encoder : IDisposable
     private int _fps;
     private int _bitrateBps;
     private int _nv12Size;
-    private byte[]? _nv12Buffer;
     private OutputStreamInfo _outputStreamInfo;
     private byte[]? _cachedSpsPps;
     private bool _requestKeyframe = true;
@@ -48,7 +47,6 @@ public sealed class MfH264Encoder : IDisposable
         _fps = fps;
         _bitrateBps = bitrateBps;
         _nv12Size = width * height * 3 / 2;
-        _nv12Buffer = new byte[_nv12Size];
 
         MediaFactory.MFStartup().CheckError();
 
@@ -160,7 +158,7 @@ public sealed class MfH264Encoder : IDisposable
 
     public unsafe EncodedPacket? EncodeBgraFrame(ReadOnlySpan<byte> bgra, long timestampUs)
     {
-        if (_encoder == null || _nv12Buffer == null || _reusableInBuffer == null || _reusableInSample == null || _reusableOutBuffer == null || _reusableOutSample == null)
+        if (_encoder == null || _reusableInBuffer == null || _reusableInSample == null || _reusableOutBuffer == null || _reusableOutSample == null)
             return null;
 
         // Convert BGRA directly into the locked MF input buffer (zero intermediate copy)

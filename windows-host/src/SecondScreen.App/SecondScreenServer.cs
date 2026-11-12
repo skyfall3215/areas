@@ -538,6 +538,12 @@ public sealed class SecondScreenServer : IDisposable
             {
                 Log($"[!] Ekran topolojisi sıfırlanamadı: {ex.Message}");
             }
+            finally
+            {
+                // Prevent ServerLoopAsync finally block from calling RestoreInternalOnly a second time
+                ConnectedClientName = null;
+                ConnectedClientDetails = null;
+            }
         }
     }
 
