@@ -97,6 +97,9 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
     private val discoveryListener = LanDiscoveryListener()
     private var userCancelled = false
     private var isStreamingActive = false
+    private val dockStateMachine = DockAutoHideStateMachine()
+    private var dockAutoHideJob: Job? = null
+    private var isTouchGestureRoutedToVideo = false
     private val touchChannel = Channel<TouchEventMessage>(
         capacity = 16,
         onBufferOverflow = BufferOverflow.DROP_OLDEST
@@ -230,15 +233,12 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
         }
 
         binding.btnDockCollapse.setOnClickListener {
-            val isExpanded = binding.dockContentGroup.visibility == View.VISIBLE
-            if (isExpanded) {
-                binding.dockContentGroup.visibility = View.GONE
-                binding.btnDockCollapse.text = "◀"
+            val nextMode = dockStateMachine.onToggleCollapseClicked()
+            if (nextMode != DockMode.EXPANDED) {
                 setStatsMenuVisible(false)
-            } else {
-                binding.dockContentGroup.visibility = View.VISIBLE
-                binding.btnDockCollapse.text = "▶"
             }
+            applyDockMode(nextMode, animate = true)
+            scheduleDockAutoHide()
         }
 
         binding.btnToggleKeyboard.setOnClickListener {
@@ -282,27 +282,51 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
         if (isStreamingActive && lastStreamWidth > 0 && lastStreamHeight > 0) {
-            // Allow interacting with the Stats/HUD menu if visible
-            if (binding.hudOverlay.visibility == View.VISIBLE) {
-                val hudRect = android.graphics.Rect()
-                binding.hudOverlay.getGlobalVisibleRect(hudRect)
-                if (hudRect.contains(ev.rawX.toInt(), ev.rawY.toInt())) {
-                    return super.dispatchTouchEvent(ev)
+            val action = ev.actionMasked
+            // Lock routing at ACTION_DOWN so waking a hidden dock on touch cannot hijack MOVE/UP of the same gesture.
+            val routeToVideo = when (action) {
+                MotionEvent.ACTION_DOWN -> {
+                    // When collapsed, hit-test only the toggle button so fading content buttons cannot eat video taps.
+                    val dockHitTarget = when (dockStateMachine.mode) {
+                        DockMode.EXPANDED -> binding.floatingControlDock
+                        DockMode.COLLAPSED -> binding.btnDockCollapse
+                        DockMode.HIDDEN -> null
+                    }
+                    val hitsOverlay = isPointInsideVisibleView(binding.hudOverlay, ev) ||
+                        (dockHitTarget != null && isPointInsideVisibleView(dockHitTarget, ev))
+                    isTouchGestureRoutedToVideo = !hitsOverlay
+                    !hitsOverlay
                 }
+                else -> isTouchGestureRoutedToVideo
             }
-            // Allow clicking the floating control dock (Keyboard, Stats, Exit) if visible
-            if (binding.floatingControlDock.visibility == View.VISIBLE) {
-                val dockRect = android.graphics.Rect()
-                binding.floatingControlDock.getGlobalVisibleRect(dockRect)
-                if (dockRect.contains(ev.rawX.toInt(), ev.rawY.toInt())) {
-                    return super.dispatchTouchEvent(ev)
+
+            if (action == MotionEvent.ACTION_DOWN) {
+                cancelDockAutoHideTimer()
+                val prevMode = dockStateMachine.mode
+                val nextMode = dockStateMachine.onUserTouch()
+                if (nextMode != prevMode) {
+                    applyDockMode(nextMode, animate = true)
                 }
+            } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                isTouchGestureRoutedToVideo = false
+                scheduleDockAutoHide()
+            }
+
+            if (!routeToVideo) {
+                return super.dispatchTouchEvent(ev)
             }
             if (processMotionEvent(ev)) {
                 return true
             }
         }
         return super.dispatchTouchEvent(ev)
+    }
+
+    private fun isPointInsideVisibleView(view: View, ev: MotionEvent): Boolean {
+        if (view.visibility != View.VISIBLE) return false
+        val rect = android.graphics.Rect()
+        view.getGlobalVisibleRect(rect)
+        return rect.contains(ev.rawX.toInt(), ev.rawY.toInt())
     }
 
     private fun toggleStatsMenu() {
@@ -315,6 +339,118 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
         binding.btnToggleStats.setTextColor(
             if (visible) Color.parseColor("#A78BFA") else Color.parseColor("#E2E8F0")
         )
+        dockStateMachine.onStatsMenuVisibilityChanged(visible)
+        if (visible) {
+            cancelDockAutoHideTimer()
+        } else {
+            scheduleDockAutoHide()
+        }
+    }
+
+    private fun applyDockMode(mode: DockMode, animate: Boolean) {
+        val dock = binding.floatingControlDock
+        val content = binding.dockContentGroup
+        dock.animate().cancel()
+        content.animate().cancel()
+
+        when (mode) {
+            DockMode.EXPANDED -> {
+                binding.btnDockCollapse.text = "▶"
+                val wasHidden = dock.visibility != View.VISIBLE
+                val wasContentHidden = content.visibility != View.VISIBLE
+                dock.visibility = View.VISIBLE
+                content.visibility = View.VISIBLE
+                if (animate) {
+                    if (wasHidden) dock.alpha = 0f
+                    if (wasContentHidden) content.alpha = 0f
+                    dock.animate().alpha(1f).setDuration(DOCK_FADE_IN_MS).start()
+                    content.animate().alpha(1f).setDuration(DOCK_FADE_IN_MS).start()
+                } else {
+                    dock.alpha = 1f
+                    content.alpha = 1f
+                }
+            }
+            DockMode.COLLAPSED -> {
+                binding.btnDockCollapse.text = "◀"
+                val wasHidden = dock.visibility != View.VISIBLE
+                dock.visibility = View.VISIBLE
+                if (animate) {
+                    if (wasHidden) {
+                        dock.alpha = 0f
+                        content.visibility = View.GONE
+                        content.alpha = 1f
+                    } else if (content.visibility == View.VISIBLE) {
+                        content.animate()
+                            .alpha(0f)
+                            .setDuration(DOCK_CONTENT_FADE_OUT_MS)
+                            .withEndAction {
+                                if (dockStateMachine.mode == DockMode.COLLAPSED) {
+                                    content.visibility = View.GONE
+                                    content.alpha = 1f
+                                }
+                            }
+                            .start()
+                    }
+                    dock.animate().alpha(DOCK_COLLAPSED_ALPHA).setDuration(DOCK_FADE_IN_MS).start()
+                } else {
+                    content.visibility = View.GONE
+                    content.alpha = 1f
+                    dock.alpha = DOCK_COLLAPSED_ALPHA
+                }
+            }
+            DockMode.HIDDEN -> {
+                if (animate && dock.visibility == View.VISIBLE) {
+                    dock.animate()
+                        .alpha(0f)
+                        .setDuration(DOCK_FADE_OUT_MS)
+                        .withEndAction {
+                            if (dockStateMachine.mode == DockMode.HIDDEN) {
+                                dock.visibility = View.GONE
+                                content.visibility = View.GONE
+                                dock.alpha = 1f
+                                content.alpha = 1f
+                            }
+                        }
+                        .start()
+                } else {
+                    dock.visibility = View.GONE
+                    content.visibility = View.GONE
+                    dock.alpha = 1f
+                    content.alpha = 1f
+                    binding.btnDockCollapse.text = "▶"
+                }
+            }
+        }
+    }
+
+    private fun scheduleDockAutoHide() {
+        dockAutoHideJob?.cancel()
+        val initialDelayMs = dockStateMachine.nextTimeoutDelayMs() ?: return
+        dockAutoHideJob = lifecycleScope.launch {
+            var nextDelayMs: Long? = initialDelayMs
+            while (isActive && nextDelayMs != null) {
+                delay(nextDelayMs)
+                val prevMode = dockStateMachine.mode
+                val nextMode = dockStateMachine.onInactivityTimeout()
+                if (nextMode != prevMode) {
+                    applyDockMode(nextMode, animate = true)
+                }
+                nextDelayMs = dockStateMachine.nextTimeoutDelayMs()
+            }
+        }
+    }
+
+    private fun cancelDockAutoHideTimer() {
+        dockAutoHideJob?.cancel()
+        dockAutoHideJob = null
+    }
+
+    private fun resetDockForDisconnectedState() {
+        cancelDockAutoHideTimer()
+        isTouchGestureRoutedToVideo = false
+        dockStateMachine.onStreamStopped()
+        setStatsMenuVisible(false)
+        applyDockMode(DockMode.HIDDEN, animate = false)
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
@@ -753,8 +889,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                     if (isRetry) {
                         // Make sure status & cancel button are visible if stream dropped mid-session
                         binding.controlOverlay.visibility = View.VISIBLE
-                        binding.floatingControlDock.visibility = View.GONE
-                        setStatsMenuVisible(false)
+                        resetDockForDisconnectedState()
                         binding.txtStatus.text = "Bağlantı koptu, yeniden bağlanılıyor ($attempt/$maxAttempts)... Hedef: $host:$port"
                     } else {
                         binding.txtStatus.text = "Bağlanıyor ($host:$port)..."
@@ -809,8 +944,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 if (binding.controlOverlay.visibility != View.VISIBLE) {
                     binding.controlOverlay.visibility = View.VISIBLE
                 }
-                setStatsMenuVisible(false)
-                binding.floatingControlDock.visibility = View.GONE
+                resetDockForDisconnectedState()
                 if (isKeyboardVisible) {
                     toggleSoftKeyboard()
                 }
@@ -840,8 +974,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
         binding.btnConnectWifi.isEnabled = true
         binding.btnCancel.visibility = View.GONE
         binding.controlOverlay.visibility = View.VISIBLE
-        setStatsMenuVisible(false)
-        binding.floatingControlDock.visibility = View.GONE
+        resetDockForDisconnectedState()
         if (isKeyboardVisible) {
             toggleSoftKeyboard()
         }
@@ -917,11 +1050,11 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 }
                 binding.txtBanner.text = "Yayın: ${ack.streamWidth}x${ack.streamHeight} [$modeLabel]"
                 // Keep statistics menu hidden by default so it does not cover the screen; user opens it via Stats button
+                isStreamingActive = true
+                dockStateMachine.onStreamStarted()
+                applyDockMode(DockMode.EXPANDED, animate = false)
                 setStatsMenuVisible(false)
-                binding.floatingControlDock.visibility = View.VISIBLE
             }
-
-            isStreamingActive = true
 
             // Touch Sender loop (ultra-low latency, non-blocking via Channel)
             val touchSenderJob = launch(Dispatchers.IO) {
@@ -1137,6 +1270,9 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 readerJob.join()
             } finally {
                 isStreamingActive = false
+                withContext(NonCancellable + Dispatchers.Main.immediate) {
+                    resetDockForDisconnectedState()
+                }
                 readerJob.cancel()
                 touchSenderJob.cancel()
                 keyboardSenderJob.cancel() // see note below
@@ -1169,11 +1305,35 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
         videoDecoder = null
     }
 
+    override fun onStart() {
+        super.onStart()
+        if (isStreamingActive) {
+            scheduleDockAutoHide()
+        }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        isTouchGestureRoutedToVideo = false
+        cancelDockAutoHideTimer()
+    }
+
     override fun onDestroy() {
         super.onDestroy()
+        cancelDockAutoHideTimer()
+        binding.floatingControlDock.animate().cancel()
+        binding.dockContentGroup.animate().cancel()
+        dockStateMachine.onStreamStopped()
         releaseWifiLock()
         discoveryListener.stop()
         sessionJob?.cancel()
         videoDecoder?.close()
+    }
+
+    private companion object {
+        private const val DOCK_FADE_IN_MS = 180L
+        private const val DOCK_CONTENT_FADE_OUT_MS = 140L
+        private const val DOCK_FADE_OUT_MS = 250L
+        private const val DOCK_COLLAPSED_ALPHA = 0.7f
     }
 }

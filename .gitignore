@@ -33,4 +33,5 @@ protocol/
 install-virtual-driver.cmd
 run-host.ps1
 *.cmd
+installer.iss
 

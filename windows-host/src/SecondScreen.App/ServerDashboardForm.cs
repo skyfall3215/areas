@@ -60,6 +60,7 @@ public sealed class ServerDashboardForm : Form
     // Tray Menu Items
     private ToolStripMenuItem _itemTitle = null!;
     private ToolStripMenuItem _itemShow = null!;
+    private ToolStripMenuItem _itemToggleServer = null!;
     private ToolStripMenuItem _itemExtend = null!;
     private ToolStripMenuItem _itemExit = null!;
 
@@ -74,8 +75,8 @@ public sealed class ServerDashboardForm : Form
     private void InitializeCustomForm()
     {
         Text = "Areas — SecondScreen Server (v1.0.4)";
-        Size = new Size(950, 760);
-        MinimumSize = new Size(900, 720);
+        Size = new Size(950, 790);
+        MinimumSize = new Size(920, 750);
         StartPosition = FormStartPosition.CenterScreen;
         BackColor = Color.FromArgb(20, 20, 26);
         ForeColor = Color.FromArgb(240, 240, 245);
@@ -96,8 +97,8 @@ public sealed class ServerDashboardForm : Form
         pnlMain.RowStyles.Add(new RowStyle(SizeType.Absolute, 65));  // 0: Header
         pnlMain.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));  // 1: Language Tabs Bar
         pnlMain.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));  // 2: Controls Bar
-        pnlMain.RowStyles.Add(new RowStyle(SizeType.Absolute, 215)); // 3: Middle Cards (Connectivity & Driver)
-        pnlMain.RowStyles.Add(new RowStyle(SizeType.Absolute, 115)); // 4: Live Session Telemetry (Protected height)
+        pnlMain.RowStyles.Add(new RowStyle(SizeType.Absolute, 245)); // 3: Middle Cards (Connectivity & Driver)
+        pnlMain.RowStyles.Add(new RowStyle(SizeType.Absolute, 125)); // 4: Live Session Telemetry (Protected height)
         pnlMain.RowStyles.Add(new RowStyle(SizeType.Percent, 100));  // 5: Event Logs (Fills remaining height)
 
         // 0. Header (Logo, Titles, Status Badge)
@@ -128,11 +129,12 @@ public sealed class ServerDashboardForm : Form
 
         _lblSubtitle = new Label
         {
-            Text = "Ultra-Low Latency Virtual Second Display for Windows & Android",
+            Text = "Second monitor solution for Windows using Android tablets.",
             Font = new Font("Segoe UI", 9f, FontStyle.Regular),
             ForeColor = Color.FromArgb(150, 150, 165),
             Location = new Point(60, 36),
-            AutoSize = true
+            AutoSize = true,
+            UseMnemonic = false
         };
         pnlHeader.Controls.Add(_lblSubtitle);
 
@@ -143,9 +145,12 @@ public sealed class ServerDashboardForm : Form
             ForeColor = Color.FromArgb(34, 197, 94),
             BackColor = Color.FromArgb(30, 41, 59),
             TextAlign = ContentAlignment.MiddleCenter,
-            Size = new Size(230, 34),
+            AutoSize = true,
+            MinimumSize = new Size(210, 34),
+            Padding = new Padding(12, 6, 12, 6),
             Dock = DockStyle.Right,
-            Margin = new Padding(0, 10, 0, 10)
+            Margin = new Padding(0, 10, 0, 10),
+            UseMnemonic = false
         };
         pnlHeader.Controls.Add(_lblStatusBadge);
         pnlMain.Controls.Add(pnlHeader, 0, 0);
@@ -158,8 +163,8 @@ public sealed class ServerDashboardForm : Form
             Margin = new Padding(0, 2, 0, 4)
         };
 
-        _btnTabEn = CreateTabButton("🇬🇧 English", true, (_, _) => SetLanguage(AppLanguage.English));
-        _btnTabTr = CreateTabButton("🇹🇷 Türkçe", false, (_, _) => SetLanguage(AppLanguage.Turkish));
+        _btnTabEn = CreateTabButton("English", true, (_, _) => SetLanguage(AppLanguage.English));
+        _btnTabTr = CreateTabButton("Türkçe", false, (_, _) => SetLanguage(AppLanguage.Turkish));
         pnlTabs.Controls.Add(_btnTabEn);
         pnlTabs.Controls.Add(_btnTabTr);
         pnlMain.Controls.Add(pnlTabs, 0, 1);
@@ -174,22 +179,7 @@ public sealed class ServerDashboardForm : Form
         };
 
         _btnToggleServer = CreateButton("⏹ Stop Server", Color.FromArgb(239, 68, 68), Color.White);
-        _btnToggleServer.Click += async (_, _) =>
-        {
-            if (_server.IsRunning)
-            {
-                _server.Stop();
-                _btnToggleServer.Text = _currentLanguage == AppLanguage.English ? "▶ Start Server" : "▶ Sunucuyu Başlat";
-                _btnToggleServer.BackColor = Color.FromArgb(37, 99, 235);
-            }
-            else
-            {
-                await _server.StartAsync();
-                _btnToggleServer.Text = _currentLanguage == AppLanguage.English ? "⏹ Stop Server" : "⏹ Sunucuyu Durdur";
-                _btnToggleServer.BackColor = Color.FromArgb(239, 68, 68);
-            }
-            UpdateStatusBadge();
-        };
+        _btnToggleServer.Click += async (_, _) => await ToggleServerAsync();
         pnlControls.Controls.Add(_btnToggleServer);
 
         _btnExtendDesktop = CreateButton("🖥️ Extend Desktop", Color.FromArgb(39, 39, 46), Color.White);
@@ -352,7 +342,8 @@ public sealed class ServerDashboardForm : Form
             Font = new Font("Segoe UI", 10.5f, FontStyle.Bold),
             ForeColor = Color.FromArgb(167, 139, 250),
             Dock = DockStyle.Top,
-            Height = 26
+            Height = 26,
+            UseMnemonic = false
         };
 
         _lblSessionClient = CreateInfoLabel("• Connected Device: Waiting (No tablet connected)");
@@ -361,7 +352,7 @@ public sealed class ServerDashboardForm : Form
 
         _lblSessionStats = CreateInfoLabel("• Stream Specs: 2304x1440 @ 60 FPS | Latency (RTT): -- ms | Bitrate: -- Mbps");
         _lblSessionStats.Dock = DockStyle.Top;
-        _lblSessionStats.Height = 26;
+        _lblSessionStats.Height = 38;
 
         pnlTelemetryCard.Controls.Add(_lblSessionStats);
         pnlTelemetryCard.Controls.Add(_lblSessionClient);
@@ -420,8 +411,8 @@ public sealed class ServerDashboardForm : Form
 
         // Subtitle
         _lblSubtitle.Text = isEn
-            ? "Ultra-Low Latency Virtual Second Display for Windows & Android"
-            : "Windows ve Android için Ultra Düşük Gecikmeli Sanal İkinci Ekran";
+            ? "Second monitor solution for Windows using Android tablets."
+            : "Android tabletler kullanarak Windows için ikinci monitör çözümü.";
 
         // Controls
         _btnToggleServer.Text = _server.IsRunning
@@ -467,7 +458,16 @@ public sealed class ServerDashboardForm : Form
     private void UpdateStatusBadge()
     {
         bool isEn = _currentLanguage == AppLanguage.English;
-        if (_server.IsRunning)
+        bool isRunning = _server.IsRunning;
+
+        string toggleText = isRunning
+            ? (isEn ? "⏹ Stop Server" : "⏹ Sunucuyu Durdur")
+            : (isEn ? "▶ Start Server" : "▶ Sunucuyu Başlat");
+        _btnToggleServer.Text = toggleText;
+        _btnToggleServer.BackColor = isRunning ? Color.FromArgb(239, 68, 68) : Color.FromArgb(37, 99, 235);
+        if (_itemToggleServer != null) _itemToggleServer.Text = toggleText;
+
+        if (isRunning)
         {
             if (_server.ConnectedClientName != null)
             {
@@ -489,6 +489,16 @@ public sealed class ServerDashboardForm : Form
             _lblStatusBadge.Text = isEn ? "● Stopped" : "● Durduruldu";
             _lblStatusBadge.ForeColor = Color.FromArgb(239, 68, 68);
         }
+    }
+
+    private async Task ToggleServerAsync()
+    {
+        if (_server.IsRunning)
+            _server.Stop();
+        else
+            await _server.StartAsync();
+
+        UpdateStatusBadge();
     }
 
     private void UpdateNetworkInfo()
@@ -566,10 +576,11 @@ public sealed class ServerDashboardForm : Form
 
         _itemTitle = new ToolStripMenuItem("Areas Server (v1.0.4)") { Enabled = false };
         _itemShow = new ToolStripMenuItem("Open Dashboard", null, (_, _) => RestoreFromTray());
+        _itemToggleServer = new ToolStripMenuItem("⏹ Stop Server", null, async (_, _) => await ToggleServerAsync());
         _itemExtend = new ToolStripMenuItem("Extend Desktop", null, (_, _) => DisplayTopologyManager.ExtendDesktop());
         _itemExit = new ToolStripMenuItem("Exit", null, (_, _) => ExitApp());
 
-        _trayMenu.Items.AddRange(new ToolStripItem[] { _itemTitle, new ToolStripSeparator(), _itemShow, _itemExtend, new ToolStripSeparator(), _itemExit });
+        _trayMenu.Items.AddRange(new ToolStripItem[] { _itemTitle, new ToolStripSeparator(), _itemShow, _itemToggleServer, _itemExtend, new ToolStripSeparator(), _itemExit });
         _trayIcon.ContextMenuStrip = _trayMenu;
         _trayIcon.DoubleClick += (_, _) => RestoreFromTray();
     }
@@ -585,6 +596,8 @@ public sealed class ServerDashboardForm : Form
     private void ExitApp()
     {
         _trayIcon.Visible = false;
+        _trayIcon.Dispose();
+        _trayMenu.Dispose();
         _server.Dispose();
         Application.Exit();
     }
@@ -691,7 +704,8 @@ public sealed class ServerDashboardForm : Form
             Font = new Font("Segoe UI", 10.5f, FontStyle.Bold),
             ForeColor = Color.FromArgb(167, 139, 250),
             AutoSize = true,
-            Margin = new Padding(0, 0, 0, 8)
+            Margin = new Padding(0, 0, 0, 8),
+            UseMnemonic = false
         };
         pnl.Controls.Add(titleLabel);
         return pnl;
@@ -705,7 +719,8 @@ public sealed class ServerDashboardForm : Form
             Font = new Font("Segoe UI", 9.5f),
             ForeColor = Color.FromArgb(220, 220, 230),
             AutoSize = true,
-            Margin = new Padding(0, 2, 0, 2)
+            Margin = new Padding(0, 2, 0, 2),
+            UseMnemonic = false
         };
     }
 
@@ -718,7 +733,11 @@ public sealed class ServerDashboardForm : Form
             ForeColor = fg,
             FlatStyle = FlatStyle.Flat,
             Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
-            Size = new Size(230, 38),
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            MinimumSize = new Size(200, 38),
+            MaximumSize = new Size(0, 38),
+            Padding = new Padding(14, 0, 14, 0),
             Cursor = Cursors.Hand,
             Margin = new Padding(0, 0, 8, 0)
         };
