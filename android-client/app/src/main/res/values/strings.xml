@@ -1,16 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Areas — İkinci Ekran</string>
-    <string name="btn_connect_usb">USB-C Kablo ile Bağlan (127.0.0.1)</string>
-    <string name="btn_connect_hotspot">Mobil Hotspot ile Bağlan (192.168.137.1)</string>
-    <string name="btn_connect_wifi">Wi-Fi ile Bağlan</string>
-    <string name="btn_cancel">Bağlantıyı İptal Et</string>
-    <string name="btn_disconnect">Çıkış</string>
-    <string name="btn_stats">İstatistikler</string>
-    <string name="hint_ip_address">PC IP (Örn: 192.168.1.50)</string>
-    <string name="header_discovered_pcs">Ağda Keşfedilen Bilgisayarlar:</string>
-    <string name="header_or">— VEYA MANUEL WIFI IP —</string>
-    <string name="status_disconnected">Bağlantı Hazır — Bir yöntem seçin</string>
-    <string name="status_connecting">Bağlanıyor...</string>
-    <string name="status_connected">Bağlandı (Yayın Aktif)</string>
+    <!-- Brand & Studio Header -->
+    <string name="app_name">Areas</string>
+    <string name="app_subtitle">Kablosuz &amp; USB İkinci Ekran Stüdyosu</string>
+    <string name="default_version_badge">v1.0.5</string>
+
+    <!-- Status Messages -->
+    <string name="status_disconnected">Bağlantı Hazır — Bir bağlantı yöntemi seçin</string>
+    <string name="status_connecting_target">Bağlanıyor (%1$s:%2$d)…</string>
+    <string name="status_reconnecting_target">Yeniden bağlanılıyor (%1$d/%2$d) • %3$s:%4$d</string>
+    <string name="status_handshake">El sıkışma ve yetkilendirme bekleniyor…</string>
+    <string name="status_connected_detail">Bağlandı (%1$dx%2$d @ %3$d FPS, %4$d Mbps)</string>
     <string name="status_error">Bağlantı koptu.</string>
+    <string name="status_stopped">Bağlantı sonlandırıldı.</string>
+    <string name="status_invalid_ip">Lütfen geçerli bir PC IP adresi girin.</string>
+    <string name="status_auth_failed">Hatalı PIN! Windows sunucudaki 6 haneli PIN kodunu girin.</string>
+    <string name="status_client_isolation">Bağlantı engellendi (Ağ İzolasyonu / Client Isolation)</string>
+    <string name="status_connect_failed">Bağlantı kurulamadı: %1$s</string>
+
+    <!-- Left Pane: Stream Configuration -->
+    <string name="label_bitrate_section">Yayın Bit Hızı</string>
+    <string name="label_bitrate_hint">Önerilen: 15 Mbps</string>
+    <string name="chip_bitrate_10">10 Mbps</string>
+    <string name="chip_bitrate_15">15 Mbps</string>
+    <string name="chip_bitrate_20">20 Mbps</string>
+    <string name="chip_bitrate_30">30 Mbps</string>
+    <string name="chip_bitrate_40">40 Mbps</string>
+
+    <string name="label_security_pin">Güvenlik PIN</string>
+    <string name="label_security_pin_sub">Windows sunucu kodu</string>
+    <string name="hint_pin_code">6 hane</string>
+
+    <string name="gesture_quick_guide">1 Parmak: İmleç/Tık  •  2 Parmak: Kaydır/Çift Tık  •  3 Parmak: Klavye</string>
+
+    <!-- Right Pane: Connection Hub -->
+    <string name="label_quick_connect">Hızlı Bağlantı</string>
+
+    <string name="btn_connect_usb">USB-C Direkt</string>
+    <string name="subtitle_connect_usb">127.0.0.1 • Kablolu ADB</string>
+
+    <string name="btn_connect_hotspot">Mobil Hotspot</string>
+    <string name="subtitle_connect_hotspot">192.168.137.1 • Doğrudan</string>
+
+    <string name="header_discovered_pcs">Ağda Keşfedilen Bilgisayarlar</string>
+    <string name="discovery_scanning_badge">Taranıyor</string>
+    <string name="discovery_found_one">1 PC bulundu</string>
+    <string name="discovery_found_many">%1$d PC bulundu</string>
+    <string name="discovery_empty_title">Aynı Wi-Fi ağındaki bilgisayarlar taranıyor…</string>
+    <string name="discovery_empty_subtitle">Windows üzerinde Areas Host uygulamasının açık olduğundan emin olun.</string>
+    <string name="btn_connect_host_short">Bağlan</string>
+
+    <string name="header_or">Manuel Wi-Fi IP Adresi</string>
+    <string name="hint_ip_address">PC IP (Örn: 192.168.1.50)</string>
+    <string name="btn_connect_wifi">Bağlan</string>
+    <string name="btn_cancel">Bağlantıyı İptal Et</string>
+
+    <!-- In-Stream Floating Dock -->
+    <string name="btn_stats">İstatistik</string>
+    <string name="btn_disconnect">Çıkış</string>
+
+    <!-- In-Stream Telemetry HUD -->
+    <string name="hud_title">TELEMETRİ &amp; AKIŞ</string>
+    <string name="hud_banner_placeholder">Yayın: --</string>
+    <string name="hud_metric_fps">FPS</string>
+    <string name="hud_metric_bitrate">BİT HIZI</string>
+    <string name="hud_metric_total">TOPLAM</string>
+    <string name="hud_unit_mbps">Mbps</string>
+    <string name="hud_unit_ms">ms</string>
+    <string name="hud_row_capture">Yakalama (Capture)</string>
+    <string name="hud_row_encode">Kodlama (Encode)</string>
+    <string name="hud_row_network">Ağ (RTT/2)</string>
+    <string name="hud_row_decode">Çözme (Decode)</string>
+    <string name="hud_diag_drop">Drop: %1$d</string>
+    <string name="hud_diag_idr">IDR: %1$d</string>
+    <string name="hud_diag_no_input">NoInput: %1$d</string>
+
+    <!-- Accessibility Content Descriptions -->
+    <string name="cd_brand_logo">Areas logosu</string>
+    <string name="cd_display_spec">Ekran çözünürlüğü ve yenileme hızı</string>
+    <string name="cd_warning_icon">Bağlantı uyarısı</string>
+    <string name="cd_pin_icon">Güvenlik PIN ikonu</string>
+    <string name="cd_usb_icon">USB-C bağlantısı</string>
+    <string name="cd_hotspot_icon">Mobil Hotspot bağlantısı</string>
+    <string name="cd_wifi_icon">Wi-Fi IP adresi</string>
+    <string name="cd_radar_icon">Ağ taraması</string>
+    <string name="cd_monitor_icon">Keşfedilen bilgisayar</string>
+    <string name="cd_toggle_keyboard">Sanal klavyeyi aç veya kapat</string>
+    <string name="cd_close_stats">İstatistik panelini kapat</string>
+    <string name="cd_dock_collapse">Kontrol çubuğunu daralt</string>
+    <string name="cd_dock_expand">Kontrol çubuğunu genişlet</string>
 </resources>

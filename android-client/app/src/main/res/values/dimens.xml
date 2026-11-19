@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Compact Landscape Dimensions (e.g. 640x360dp) -->
+    <dimen name="studio_outer_padding_h">12dp</dimen>
+    <dimen name="studio_outer_padding_v">10dp</dimen>
+    <dimen name="studio_column_gap">10dp</dimen>
+    <dimen name="studio_card_padding">14dp</dimen>
+    <dimen name="studio_section_gap">10dp</dimen>
+    <dimen name="studio_logo_size">42dp</dimen>
+    <dimen name="studio_title_size">20sp</dimen>
+    <dimen name="studio_subtitle_size">11sp</dimen>
+    <dimen name="quick_card_padding">12dp</dimen>
+    <dimen name="quick_badge_size">34dp</dimen>
+    <dimen name="hud_width">316dp</dimen>
+    <dimen name="hud_margin_bottom">60dp</dimen>
+    <dimen name="dock_margin">10dp</dimen>
+</resources>

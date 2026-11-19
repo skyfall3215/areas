@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Tablet-First Landscape Dimensions (sw600dp+, e.g. 2304x1440 Galaxy Tab) -->
+    <dimen name="studio_outer_padding_h">28dp</dimen>
+    <dimen name="studio_outer_padding_v">24dp</dimen>
+    <dimen name="studio_column_gap">18dp</dimen>
+    <dimen name="studio_card_padding">22dp</dimen>
+    <dimen name="studio_section_gap">14dp</dimen>
+    <dimen name="studio_logo_size">52dp</dimen>
+    <dimen name="studio_title_size">24sp</dimen>
+    <dimen name="studio_subtitle_size">13sp</dimen>
+    <dimen name="quick_card_padding">16dp</dimen>
+    <dimen name="quick_badge_size">40dp</dimen>
+    <dimen name="hud_width">352dp</dimen>
+    <dimen name="hud_margin_bottom">66dp</dimen>
+    <dimen name="dock_margin">14dp</dimen>
+</resources>

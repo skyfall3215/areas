@@ -1,8 +1,13 @@
 package com.secondscreen.client.ui
 
+import android.animation.ObjectAnimator
+import android.animation.ValueAnimator
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.pm.PackageManager
+import android.content.res.ColorStateList
 import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Bundle
@@ -19,14 +24,17 @@ import android.view.View
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
+import android.view.animation.DecelerateInterpolator
+import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
-import android.widget.AdapterView
-import android.widget.ArrayAdapter
-import android.widget.Button
-import android.widget.LinearLayout
+import android.widget.TextView
+import androidx.annotation.ColorRes
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import com.secondscreen.client.R
 import com.secondscreen.client.databinding.ActivityMainBinding
+import com.secondscreen.client.databinding.ItemDiscoveredHostBinding
 import com.secondscreen.client.decoder.VideoDecoder
 import com.secondscreen.client.input.TouchCoordinateMapper
 import com.secondscreen.client.network.DiscoveredHost
@@ -65,6 +73,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.nio.ByteBuffer
 import java.util.Locale
+import kotlin.math.roundToInt
 
 private sealed interface DecodeItem {
     class Config(val spsPps: ByteArray) : DecodeItem
@@ -80,6 +89,13 @@ private sealed interface DecodeItem {
 }
 
 private class AuthFailedException(message: String) : Exception(message)
+
+private enum class ConnectionUiState {
+    IDLE,
+    CONNECTING,
+    CONNECTED,
+    ERROR
+}
 
 class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
@@ -97,6 +113,9 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
     private val discoveryListener = LanDiscoveryListener()
     private var userCancelled = false
     private var isStreamingActive = false
+    private var areConnectTriggersEnabled = true
+    private var renderedHostKeys: List<Triple<String, String, Int>> = emptyList()
+    private var radarPulseAnimator: ObjectAnimator? = null
     private val dockStateMachine = DockAutoHideStateMachine()
     private var dockAutoHideJob: Job? = null
     private var isTouchGestureRoutedToVideo = false
@@ -166,6 +185,11 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
         binding.videoSurface.holder.addCallback(this)
 
+        // Populate dynamic brand version badge & tablet native display spec pill
+        binding.txtVersionBadge.text = "v${resolveAppVersionName()}"
+        populateDisplaySpecBadge()
+        updateConnectionStatus(getString(R.string.status_disconnected), ConnectionUiState.IDLE)
+
         // Load preferences
         val prefs = getSharedPreferences("second_screen_prefs", Context.MODE_PRIVATE)
         val lastIp = prefs.getString("last_lan_ip", "") ?: ""
@@ -177,20 +201,42 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
             binding.inputPin.setText(lastPin)
         }
 
-        // Bitrate selector (default 15 Mbps)
-        val bitrateOptions = listOf(10, 15, 20, 30, 40)
-        val bitrateLabels = listOf("10 Mbps", "15 Mbps (Varsayılan)", "20 Mbps", "30 Mbps", "40 Mbps")
-        val bitrateAdapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, bitrateLabels)
-        binding.spinnerBitrate.adapter = bitrateAdapter
+        // Bitrate pill chip selector (default 15 Mbps)
+        val bitrateChipMap = listOf(
+            R.id.chipBitrate10 to 10,
+            R.id.chipBitrate15 to 15,
+            R.id.chipBitrate20 to 20,
+            R.id.chipBitrate30 to 30,
+            R.id.chipBitrate40 to 40
+        )
         val savedBitrate = prefs.getInt("preferred_bitrate_mbps", 15)
-        val defaultIdx = bitrateOptions.indexOf(savedBitrate).takeIf { it >= 0 } ?: 1
-        binding.spinnerBitrate.setSelection(defaultIdx)
-        binding.spinnerBitrate.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                val chosen = bitrateOptions[position]
-                prefs.edit().putInt("preferred_bitrate_mbps", chosen).apply()
+        val initialChipId = bitrateChipMap.firstOrNull { it.second == savedBitrate }?.first ?: R.id.chipBitrate15
+        binding.chipGroupBitrate.check(initialChipId)
+        binding.chipGroupBitrate.setOnCheckedStateChangeListener { _, checkedIds ->
+            val checkedId = checkedIds.firstOrNull() ?: return@setOnCheckedStateChangeListener
+            val chosen = bitrateChipMap.firstOrNull { it.first == checkedId }?.second ?: 15
+            prefs.edit().putInt("preferred_bitrate_mbps", chosen).apply()
+        }
+
+        binding.inputIpAddress.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_GO || actionId == EditorInfo.IME_ACTION_DONE) {
+                if (areConnectTriggersEnabled) {
+                    binding.btnConnectWifi.performClick()
+                }
+                true
+            } else {
+                false
             }
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+
+        binding.inputPin.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_DONE) {
+                hideKeyboard()
+                binding.inputPin.clearFocus()
+                true
+            } else {
+                false
+            }
         }
 
         binding.btnConnectUsb.setOnClickListener {
@@ -207,8 +253,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 prefs.edit().putString("last_lan_ip", ip).apply()
                 connectTo(ip)
             } else {
-                binding.txtStatus.text = "Lütfen geçerli bir IP adresi girin."
-                binding.txtStatus.setTextColor(getColor(android.R.color.holo_red_light))
+                updateConnectionStatus(getString(R.string.status_invalid_ip), ConnectionUiState.ERROR)
             }
         }
 
@@ -275,6 +320,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
         // Start UDP LAN Discovery
         startDiscovery()
+        startRadarPulseIfNeeded()
 
         // Enable multi-touch capture on the video surface
         setupTouchHandling()
@@ -292,7 +338,8 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                         DockMode.COLLAPSED -> binding.btnDockCollapse
                         DockMode.HIDDEN -> null
                     }
-                    val hitsOverlay = isPointInsideVisibleView(binding.hudOverlay, ev) ||
+                    val hitsHud = isStatsMenuOpen && isPointInsideVisibleView(binding.hudOverlay, ev)
+                    val hitsOverlay = hitsHud ||
                         (dockHitTarget != null && isPointInsideVisibleView(dockHitTarget, ev))
                     isTouchGestureRoutedToVideo = !hitsOverlay
                     !hitsOverlay
@@ -333,12 +380,62 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
         setStatsMenuVisible(!isStatsMenuOpen)
     }
 
-    private fun setStatsMenuVisible(visible: Boolean) {
+    private fun setStatsMenuVisible(visible: Boolean, animate: Boolean = true) {
         isStatsMenuOpen = visible
-        binding.hudOverlay.visibility = if (visible) View.VISIBLE else View.GONE
-        binding.btnToggleStats.setTextColor(
-            if (visible) Color.parseColor("#A78BFA") else Color.parseColor("#E2E8F0")
-        )
+        val hud = binding.hudOverlay
+        hud.animate().cancel()
+
+        if (visible) {
+            updateHudTelemetry(telemetry.getSnapshot())
+            hud.visibility = View.VISIBLE
+            if (animate) {
+                val slideOffsetPx = 16f * resources.displayMetrics.density
+                hud.alpha = 0f
+                hud.translationY = slideOffsetPx
+                hud.animate()
+                    .alpha(1f)
+                    .translationY(0f)
+                    .setDuration(HUD_ANIM_IN_MS)
+                    .setInterpolator(DecelerateInterpolator())
+                    .start()
+            } else {
+                hud.alpha = 1f
+                hud.translationY = 0f
+            }
+        } else {
+            if (animate && hud.visibility == View.VISIBLE) {
+                val slideOffsetPx = 16f * resources.displayMetrics.density
+                hud.animate()
+                    .alpha(0f)
+                    .translationY(slideOffsetPx)
+                    .setDuration(HUD_ANIM_OUT_MS)
+                    .withEndAction {
+                        if (!isStatsMenuOpen) {
+                            hud.visibility = View.GONE
+                            hud.alpha = 1f
+                            hud.translationY = 0f
+                        }
+                    }
+                    .start()
+            } else {
+                hud.visibility = View.GONE
+                hud.alpha = 1f
+                hud.translationY = 0f
+            }
+        }
+
+        if (visible) {
+            binding.btnToggleStats.backgroundTintList =
+                ColorStateList.valueOf(ContextCompat.getColor(this, R.color.ripple_violet))
+            val activeViolet = ContextCompat.getColor(this, R.color.brand_violet_soft)
+            binding.btnToggleStats.setTextColor(activeViolet)
+            binding.btnToggleStats.iconTint = ColorStateList.valueOf(activeViolet)
+        } else {
+            binding.btnToggleStats.backgroundTintList = ColorStateList.valueOf(Color.TRANSPARENT)
+            binding.btnToggleStats.setTextColor(ContextCompat.getColor(this, R.color.text_primary))
+            binding.btnToggleStats.iconTint = ColorStateList.valueOf(ContextCompat.getColor(this, R.color.text_secondary))
+        }
+
         dockStateMachine.onStatsMenuVisibilityChanged(visible)
         if (visible) {
             cancelDockAutoHideTimer()
@@ -355,7 +452,8 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
         when (mode) {
             DockMode.EXPANDED -> {
-                binding.btnDockCollapse.text = "▶"
+                binding.btnDockCollapse.setImageResource(R.drawable.ic_chevron_right)
+                binding.btnDockCollapse.contentDescription = getString(R.string.cd_dock_collapse)
                 val wasHidden = dock.visibility != View.VISIBLE
                 val wasContentHidden = content.visibility != View.VISIBLE
                 dock.visibility = View.VISIBLE
@@ -371,7 +469,8 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 }
             }
             DockMode.COLLAPSED -> {
-                binding.btnDockCollapse.text = "◀"
+                binding.btnDockCollapse.setImageResource(R.drawable.ic_chevron_left)
+                binding.btnDockCollapse.contentDescription = getString(R.string.cd_dock_expand)
                 val wasHidden = dock.visibility != View.VISIBLE
                 dock.visibility = View.VISIBLE
                 if (animate) {
@@ -417,7 +516,8 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                     content.visibility = View.GONE
                     dock.alpha = 1f
                     content.alpha = 1f
-                    binding.btnDockCollapse.text = "▶"
+                    binding.btnDockCollapse.setImageResource(R.drawable.ic_chevron_right)
+                    binding.btnDockCollapse.contentDescription = getString(R.string.cd_dock_collapse)
                 }
             }
         }
@@ -449,8 +549,21 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
         cancelDockAutoHideTimer()
         isTouchGestureRoutedToVideo = false
         dockStateMachine.onStreamStopped()
-        setStatsMenuVisible(false)
+        setStatsMenuVisible(false, animate = false)
         applyDockMode(DockMode.HIDDEN, animate = false)
+        updateKeyboardButtonState()
+    }
+
+    private fun updateKeyboardButtonState() {
+        if (isKeyboardVisible) {
+            binding.btnToggleKeyboard.setBackgroundResource(R.drawable.bg_dock_btn_active)
+            binding.btnToggleKeyboard.imageTintList =
+                ColorStateList.valueOf(ContextCompat.getColor(this, R.color.brand_cyan))
+        } else {
+            binding.btnToggleKeyboard.setBackgroundResource(R.drawable.bg_dock_btn)
+            binding.btnToggleKeyboard.imageTintList =
+                ColorStateList.valueOf(ContextCompat.getColor(this, R.color.text_primary))
+        }
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
@@ -506,6 +619,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
             }
             isKeyboardVisible = true
         }
+        updateKeyboardButtonState()
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -787,6 +901,140 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
         return false
     }
 
+    private fun resolveAppVersionName(): String {
+        return try {
+            val info = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                packageManager.getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(0))
+            } else {
+                @Suppress("DEPRECATION")
+                packageManager.getPackageInfo(packageName, 0)
+            }
+            info.versionName?.takeIf { it.isNotBlank() } ?: "1.0.5"
+        } catch (_: Exception) {
+            "1.0.5"
+        }
+    }
+
+    private fun queryNativeDisplaySpec(): Triple<Int, Int, Int> {
+        val metrics = DisplayMetrics()
+        @Suppress("DEPRECATION")
+        windowManager.defaultDisplay.getRealMetrics(metrics)
+        @Suppress("DEPRECATION")
+        val refreshRate = windowManager.defaultDisplay.refreshRate.roundToInt().coerceAtLeast(60)
+        return Triple(metrics.widthPixels, metrics.heightPixels, refreshRate)
+    }
+
+    private fun populateDisplaySpecBadge() {
+        try {
+            val (width, height, refreshRate) = queryNativeDisplaySpec()
+            binding.txtDisplaySpec.text = "$width × $height • ${refreshRate} Hz"
+        } catch (_: Exception) {
+            binding.displaySpecPill.visibility = View.GONE
+        }
+    }
+
+    private fun showControlOverlay() {
+        binding.controlOverlay.visibility = View.VISIBLE
+        startRadarPulseIfNeeded()
+    }
+
+    private fun hideControlOverlay() {
+        stopRadarPulse()
+        binding.controlOverlay.visibility = View.GONE
+    }
+
+    private fun startRadarPulseIfNeeded() {
+        if (binding.controlOverlay.visibility != View.VISIBLE || renderedHostKeys.isNotEmpty()) {
+            stopRadarPulse()
+            return
+        }
+        if (radarPulseAnimator?.isRunning == true) return
+        radarPulseAnimator = ObjectAnimator.ofFloat(binding.imgDiscoveryRadar, View.ALPHA, 1f, 0.32f).apply {
+            duration = 1350L
+            repeatCount = ValueAnimator.INFINITE
+            repeatMode = ValueAnimator.REVERSE
+            start()
+        }
+    }
+
+    private fun stopRadarPulse() {
+        radarPulseAnimator?.cancel()
+        radarPulseAnimator = null
+        binding.imgDiscoveryRadar.alpha = 1f
+    }
+
+    private fun setConnectTriggersEnabled(enabled: Boolean) {
+        areConnectTriggersEnabled = enabled
+        val targetAlpha = if (enabled) 1.0f else 0.48f
+        listOf(binding.btnConnectUsb, binding.btnConnectHotspot, binding.btnConnectWifi).forEach { trigger ->
+            trigger.isEnabled = enabled
+            trigger.alpha = targetAlpha
+        }
+        for (i in 0 until binding.discoveredContainer.childCount) {
+            val hostCard = binding.discoveredContainer.getChildAt(i)
+            hostCard.isEnabled = enabled
+            hostCard.alpha = targetAlpha
+        }
+    }
+
+    private fun applyPillBackground(
+        view: View,
+        @ColorRes fillColorRes: Int,
+        @ColorRes strokeColorRes: Int,
+        cornerRadiusDp: Float = 14f
+    ) {
+        val density = resources.displayMetrics.density
+        val bg = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = cornerRadiusDp * density
+            setColor(ContextCompat.getColor(this@MainActivity, fillColorRes))
+            setStroke((1f * density).toInt().coerceAtLeast(1), ContextCompat.getColor(this@MainActivity, strokeColorRes))
+        }
+        view.background = bg
+    }
+
+    private fun updateConnectionStatus(message: String, state: ConnectionUiState) {
+        binding.txtStatus.text = message
+        val isConnecting = state == ConnectionUiState.CONNECTING
+        binding.progressConnecting.visibility = if (isConnecting) View.VISIBLE else View.GONE
+        binding.statusIndicatorDot.visibility = if (isConnecting) View.GONE else View.VISIBLE
+
+        when (state) {
+            ConnectionUiState.IDLE -> {
+                binding.statusIndicatorDot.backgroundTintList =
+                    ColorStateList.valueOf(ContextCompat.getColor(this, R.color.status_idle_dot))
+                binding.txtStatus.setTextColor(ContextCompat.getColor(this, R.color.status_idle_text))
+                applyPillBackground(binding.statusPillContainer, R.color.status_idle_bg, R.color.glass_stroke)
+            }
+            ConnectionUiState.CONNECTING -> {
+                binding.txtStatus.setTextColor(ContextCompat.getColor(this, R.color.text_cyan_bright))
+                applyPillBackground(binding.statusPillContainer, R.color.status_cyan_bg, R.color.status_cyan_stroke)
+            }
+            ConnectionUiState.CONNECTED -> {
+                binding.statusIndicatorDot.backgroundTintList =
+                    ColorStateList.valueOf(ContextCompat.getColor(this, R.color.status_emerald))
+                binding.txtStatus.setTextColor(ContextCompat.getColor(this, R.color.status_emerald_text))
+                applyPillBackground(binding.statusPillContainer, R.color.status_emerald_bg, R.color.status_emerald)
+            }
+            ConnectionUiState.ERROR -> {
+                binding.statusIndicatorDot.backgroundTintList =
+                    ColorStateList.valueOf(ContextCompat.getColor(this, R.color.status_rose))
+                binding.txtStatus.setTextColor(ContextCompat.getColor(this, R.color.status_rose_text))
+                applyPillBackground(binding.statusPillContainer, R.color.status_rose_bg, R.color.status_rose_stroke)
+            }
+        }
+    }
+
+    private fun showWarningBanner(message: String) {
+        binding.txtWarning.text = message
+        binding.warningBanner.visibility = View.VISIBLE
+    }
+
+    private fun hideWarningBanner() {
+        binding.txtWarning.text = ""
+        binding.warningBanner.visibility = View.GONE
+    }
+
     private fun startDiscovery() {
         discoveryListener.start(lifecycleScope)
         lifecycleScope.launch {
@@ -797,37 +1045,54 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
     }
 
     private fun updateDiscoveredUi(hosts: List<DiscoveredHost>) {
+        val newKeys = hosts.map { Triple(it.hostname, it.ipAddress, it.port) }
         if (hosts.isEmpty()) {
-            binding.discoveredSection.visibility = View.GONE
-            binding.discoveredContainer.removeAllViews()
+            if (renderedHostKeys.isNotEmpty() || binding.discoveredContainer.childCount > 0) {
+                binding.discoveredContainer.removeAllViews()
+            }
+            renderedHostKeys = emptyList()
+            binding.discoveredContainer.visibility = View.GONE
+            binding.discoveredEmptyState.visibility = View.VISIBLE
+            binding.txtDiscoveryBadge.text = getString(R.string.discovery_scanning_badge)
+            binding.txtDiscoveryBadge.setTextColor(ContextCompat.getColor(this, R.color.brand_cyan))
+            startRadarPulseIfNeeded()
             return
         }
 
-        binding.discoveredSection.visibility = View.VISIBLE
+        binding.discoveredEmptyState.visibility = View.GONE
+        binding.discoveredContainer.visibility = View.VISIBLE
+        binding.txtDiscoveryBadge.text = if (hosts.size == 1) {
+            getString(R.string.discovery_found_one)
+        } else {
+            getString(R.string.discovery_found_many, hosts.size)
+        }
+        binding.txtDiscoveryBadge.setTextColor(ContextCompat.getColor(this, R.color.status_emerald))
+
+        if (newKeys == renderedHostKeys) {
+            return
+        }
+        renderedHostKeys = newKeys
+        stopRadarPulse()
         binding.discoveredContainer.removeAllViews()
 
         for (host in hosts) {
-            val btn = Button(this).apply {
-                text = "🖥️ ${host.hostname} (${host.ipAddress})"
-                textSize = 13f
-                isAllCaps = false
-                setTextColor(Color.WHITE)
-                setBackgroundColor(0xFF1E293B.toInt())
-                val params = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply {
-                    setMargins(0, 6, 0, 6)
-                }
-                layoutParams = params
-                setOnClickListener {
-                    binding.inputIpAddress.setText(host.ipAddress)
-                    getSharedPreferences("second_screen_prefs", Context.MODE_PRIVATE)
-                        .edit().putString("last_lan_ip", host.ipAddress).apply()
-                    connectTo(host.ipAddress, host.port)
-                }
+            val cardBinding = ItemDiscoveredHostBinding.inflate(
+                layoutInflater,
+                binding.discoveredContainer,
+                false
+            )
+            cardBinding.txtHostName.text = host.hostname
+            cardBinding.txtHostAddress.text = "${host.ipAddress}:${host.port}"
+            cardBinding.root.isEnabled = areConnectTriggersEnabled
+            cardBinding.root.alpha = if (areConnectTriggersEnabled) 1.0f else 0.48f
+            cardBinding.root.setOnClickListener {
+                if (!areConnectTriggersEnabled) return@setOnClickListener
+                binding.inputIpAddress.setText(host.ipAddress)
+                getSharedPreferences("second_screen_prefs", Context.MODE_PRIVATE)
+                    .edit().putString("last_lan_ip", host.ipAddress).apply()
+                connectTo(host.ipAddress, host.port)
             }
-            binding.discoveredContainer.addView(btn)
+            binding.discoveredContainer.addView(cardBinding.root)
         }
     }
 
@@ -871,11 +1136,9 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
         sessionJob?.cancel()
 
         sessionJob = lifecycleScope.launch {
-            binding.btnConnectUsb.isEnabled = false
-            binding.btnConnectHotspot.isEnabled = false
-            binding.btnConnectWifi.isEnabled = false
+            setConnectTriggersEnabled(false)
             binding.btnCancel.visibility = View.VISIBLE
-            binding.txtWarning.visibility = View.GONE
+            hideWarningBanner()
 
             val backoffs = listOf(1000L, 1500L, 2000L, 3000L, 4000L)
             val maxAttempts = 8
@@ -888,13 +1151,18 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 withContext(Dispatchers.Main) {
                     if (isRetry) {
                         // Make sure status & cancel button are visible if stream dropped mid-session
-                        binding.controlOverlay.visibility = View.VISIBLE
+                        showControlOverlay()
                         resetDockForDisconnectedState()
-                        binding.txtStatus.text = "Bağlantı koptu, yeniden bağlanılıyor ($attempt/$maxAttempts)... Hedef: $host:$port"
+                        updateConnectionStatus(
+                            getString(R.string.status_reconnecting_target, attempt, maxAttempts, host, port),
+                            ConnectionUiState.CONNECTING
+                        )
                     } else {
-                        binding.txtStatus.text = "Bağlanıyor ($host:$port)..."
+                        updateConnectionStatus(
+                            getString(R.string.status_connecting_target, host, port),
+                            ConnectionUiState.CONNECTING
+                        )
                     }
-                    binding.txtStatus.setTextColor(getColor(android.R.color.darker_gray))
                 }
 
                 try {
@@ -903,28 +1171,33 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                     attempt = 0
                 } catch (e: AuthFailedException) {
                     withContext(Dispatchers.Main) {
-                        binding.controlOverlay.visibility = View.VISIBLE
-                        binding.txtStatus.text = e.message
-                        binding.txtStatus.setTextColor(getColor(android.R.color.holo_red_light))
+                        showControlOverlay()
+                        updateConnectionStatus(
+                            e.message ?: getString(R.string.status_auth_failed),
+                            ConnectionUiState.ERROR
+                        )
                     }
                     break // Never retry automatically with wrong PIN
                 } catch (e: ClientIsolationException) {
                     // Yurt / Okul Wi-Fi Client Isolation detected!
                     withContext(Dispatchers.Main) {
-                        binding.controlOverlay.visibility = View.VISIBLE
-                        binding.txtWarning.text = e.message
-                        binding.txtWarning.visibility = View.VISIBLE
-                        binding.txtStatus.text = "Bağlantı engellendi (Client Isolation)"
-                        binding.txtStatus.setTextColor(getColor(android.R.color.holo_red_light))
+                        showControlOverlay()
+                        showWarningBanner(e.message ?: getString(R.string.status_client_isolation))
+                        updateConnectionStatus(
+                            getString(R.string.status_client_isolation),
+                            ConnectionUiState.ERROR
+                        )
                     }
                     break // Stop retry loop
                 } catch (e: CancellationException) {
                     break
                 } catch (e: Exception) {
                     withContext(Dispatchers.Main) {
-                        binding.controlOverlay.visibility = View.VISIBLE
-                        binding.txtStatus.text = "Bağlantı koptu veya kurulamadı: ${e.message}"
-                        binding.txtStatus.setTextColor(getColor(android.R.color.holo_red_light))
+                        showControlOverlay()
+                        updateConnectionStatus(
+                            getString(R.string.status_connect_failed, e.message ?: getString(R.string.status_error)),
+                            ConnectionUiState.ERROR
+                        )
                     }
                 }
 
@@ -937,12 +1210,10 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
             // Cleanup UI after session terminates
             withContext(Dispatchers.Main) {
-                binding.btnConnectUsb.isEnabled = true
-                binding.btnConnectHotspot.isEnabled = true
-                binding.btnConnectWifi.isEnabled = true
+                setConnectTriggersEnabled(true)
                 binding.btnCancel.visibility = View.GONE
                 if (binding.controlOverlay.visibility != View.VISIBLE) {
-                    binding.controlOverlay.visibility = View.VISIBLE
+                    showControlOverlay()
                 }
                 resetDockForDisconnectedState()
                 if (isKeyboardVisible) {
@@ -954,6 +1225,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
     private fun cancelActiveSession() {
         userCancelled = true
+        isStreamingActive = false
         val currentTransport = activeTransport
         lifecycleScope.launch(Dispatchers.IO) {
             try {
@@ -967,13 +1239,11 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
             }
         }
         sessionJob?.cancel()
-        binding.txtStatus.text = "Bağlantı sonlandırıldı."
-        binding.txtStatus.setTextColor(getColor(android.R.color.darker_gray))
-        binding.btnConnectUsb.isEnabled = true
-        binding.btnConnectHotspot.isEnabled = true
-        binding.btnConnectWifi.isEnabled = true
+        updateConnectionStatus(getString(R.string.status_stopped), ConnectionUiState.IDLE)
+        hideWarningBanner()
+        setConnectTriggersEnabled(true)
         binding.btnCancel.visibility = View.GONE
-        binding.controlOverlay.visibility = View.VISIBLE
+        showControlOverlay()
         resetDockForDisconnectedState()
         if (isKeyboardVisible) {
             toggleSoftKeyboard()
@@ -990,13 +1260,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
             transport.connect()
 
             // 2. Query screen metrics
-            val metrics = DisplayMetrics()
-            @Suppress("DEPRECATION")
-            windowManager.defaultDisplay.getRealMetrics(metrics)
-            val nativeWidth = metrics.widthPixels
-            val nativeHeight = metrics.heightPixels
-            @Suppress("DEPRECATION")
-            val refreshRate = windowManager.defaultDisplay.refreshRate.toInt().coerceAtLeast(60)
+            val (nativeWidth, nativeHeight, refreshRate) = queryNativeDisplaySpec()
             val deviceName = Build.MODEL ?: "Android Tablet"
 
             val isUsb = host == "127.0.0.1" || host == "localhost"
@@ -1025,7 +1289,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
             transport.sendPacket(helloHeader, helloPayload)
 
             withContext(Dispatchers.Main) {
-                binding.txtStatus.text = "El sıkışma bekleniyor..."
+                updateConnectionStatus(getString(R.string.status_handshake), ConnectionUiState.CONNECTING)
             }
 
             // 4. Wait for HELLO_ACK
@@ -1035,14 +1299,23 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
             }
             val ack = HelloAckMessage.readPayloadFrom(ByteBuffer.wrap(ackPayload))
             if (ack.status == ProtocolConstants.HELLO_STATUS_AUTH_FAILED) {
-                throw AuthFailedException("Hatalı PIN! Windows sunucudaki 6 haneli PIN kodunu girin.")
+                throw AuthFailedException(getString(R.string.status_auth_failed))
             }
             lastStreamWidth = ack.streamWidth
             lastStreamHeight = ack.streamHeight
 
             withContext(Dispatchers.Main) {
-                binding.txtStatus.text = "Bağlandı (${ack.streamWidth}x${ack.streamHeight} @ ${ack.targetFps} FPS, ${ack.bitrateBps / 1_000_000} Mbps)"
-                binding.controlOverlay.visibility = View.GONE
+                updateConnectionStatus(
+                    getString(
+                        R.string.status_connected_detail,
+                        ack.streamWidth,
+                        ack.streamHeight,
+                        ack.targetFps,
+                        ack.bitrateBps / 1_000_000
+                    ),
+                    ConnectionUiState.CONNECTED
+                )
+                hideControlOverlay()
                 val modeLabel = when {
                     isUsb -> "USB"
                     host == "192.168.137.1" -> "Hotspot"
@@ -1053,7 +1326,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 isStreamingActive = true
                 dockStateMachine.onStreamStarted()
                 applyDockMode(DockMode.EXPANDED, animate = false)
-                setStatsMenuVisible(false)
+                setStatsMenuVisible(false, animate = false)
             }
 
             // Touch Sender loop (ultra-low latency, non-blocking via Channel)
@@ -1086,21 +1359,12 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 }
             }
 
-            // 5. HUD update loop (every 300 ms)
+            // 5. HUD update loop (every 300 ms, only while HUD is open)
             val hudJob = launch(Dispatchers.Main) {
                 while (isActive) {
-                    val s = telemetry.getSnapshot()
-                    binding.txtHudFpsBitrate.text = String.format(Locale.US, "FPS: %d | Bitrate: %.1f Mbps", s.fps, s.bitrateMbps)
-                    binding.txtHudSentBitrate.visibility = View.GONE
-                    binding.txtHudLoss.visibility = View.VISIBLE
-                    binding.txtHudLoss.text = String.format(
-                        Locale.US, "Drop: %d | IDR: %d | NoInput: %d",
-                        s.droppedFrames, s.idrRequests, s.inputUnavailable
-                    )
-                    binding.txtHudEncode.text = String.format(Locale.US, "Encode: %.1f ms (Cap: %.1f ms)", s.encodeMs, s.captureMs)
-                    binding.txtHudNetwork.text = String.format(Locale.US, "Ağ (RTT/2): %.1f ms", s.networkRttDiv2Ms)
-                    binding.txtHudDecode.text = String.format(Locale.US, "Decode: %.1f ms", s.decodeMs)
-                    binding.txtHudTotal.text = String.format(Locale.US, "Tahmini Gecikme: %.1f ms", s.estimatedPipelineMs)
+                    if (isStatsMenuOpen) {
+                        updateHudTelemetry(telemetry.getSnapshot())
+                    }
                     delay(300)
                 }
             }
@@ -1292,6 +1556,54 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
         }
     }
 
+    private fun updateHudTelemetry(s: com.secondscreen.client.telemetry.TelemetrySnapshot) {
+        binding.txtHudFpsValue.text = s.fps.toString()
+        binding.txtHudBitrateValue.text = String.format(Locale.US, "%.1f", s.bitrateMbps)
+        binding.txtHudTotalValue.text = String.format(Locale.US, "%.1f", s.estimatedPipelineMs)
+        binding.txtHudCaptureValue.text = String.format(Locale.US, "%.1f ms", s.captureMs)
+        binding.txtHudEncodeValue.text = String.format(Locale.US, "%.1f ms", s.encodeMs)
+        binding.txtHudNetworkValue.text = String.format(Locale.US, "%.1f ms", s.networkRttDiv2Ms)
+        binding.txtHudDecodeValue.text = String.format(Locale.US, "%.1f ms", s.decodeMs)
+
+        val healthColorRes = when {
+            s.fps == 0 && s.estimatedPipelineMs <= 0.0 -> R.color.status_idle_dot
+            s.estimatedPipelineMs < 25.0 -> R.color.status_emerald
+            s.estimatedPipelineMs < 50.0 -> R.color.brand_cyan
+            s.estimatedPipelineMs < 85.0 -> R.color.status_amber
+            else -> R.color.status_rose
+        }
+        val healthColor = ContextCompat.getColor(this, healthColorRes)
+        binding.hudHealthDot.backgroundTintList = ColorStateList.valueOf(healthColor)
+        binding.txtHudTotalValue.setTextColor(
+            if (healthColorRes == R.color.status_idle_dot) {
+                ContextCompat.getColor(this, R.color.brand_violet_soft)
+            } else {
+                healthColor
+            }
+        )
+
+        updateDiagBadge(binding.txtDiagDrop, getString(R.string.hud_diag_drop, s.droppedFrames), s.droppedFrames)
+        updateDiagBadge(binding.txtDiagIdr, getString(R.string.hud_diag_idr, s.idrRequests), s.idrRequests)
+        updateDiagBadge(binding.txtDiagNoInput, getString(R.string.hud_diag_no_input, s.inputUnavailable), s.inputUnavailable)
+    }
+
+    private fun updateDiagBadge(badge: TextView, label: String, count: Long) {
+        if (badge.text.toString() != label) {
+            badge.text = label
+        }
+        val isWarningActive = count > 0L
+        if ((badge.tag as? Boolean) != isWarningActive) {
+            badge.tag = isWarningActive
+            if (isWarningActive) {
+                badge.setTextColor(ContextCompat.getColor(this, R.color.status_amber_text))
+                applyPillBackground(badge, R.color.status_amber_bg, R.color.status_amber_stroke, cornerRadiusDp = 99f)
+            } else {
+                badge.setTextColor(ContextCompat.getColor(this, R.color.text_secondary))
+                badge.setBackgroundResource(R.drawable.bg_diag_pill)
+            }
+        }
+    }
+
     override fun surfaceCreated(holder: SurfaceHolder) {
         isSurfaceAvailable = true
         videoDecoder = VideoDecoder(holder.surface)
@@ -1309,6 +1621,8 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
         super.onStart()
         if (isStreamingActive) {
             scheduleDockAutoHide()
+        } else {
+            startRadarPulseIfNeeded()
         }
     }
 
@@ -1316,11 +1630,14 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
         super.onStop()
         isTouchGestureRoutedToVideo = false
         cancelDockAutoHideTimer()
+        stopRadarPulse()
     }
 
     override fun onDestroy() {
         super.onDestroy()
         cancelDockAutoHideTimer()
+        stopRadarPulse()
+        binding.hudOverlay.animate().cancel()
         binding.floatingControlDock.animate().cancel()
         binding.dockContentGroup.animate().cancel()
         dockStateMachine.onStreamStopped()
@@ -1331,6 +1648,8 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
     }
 
     private companion object {
+        private const val HUD_ANIM_IN_MS = 180L
+        private const val HUD_ANIM_OUT_MS = 140L
         private const val DOCK_FADE_IN_MS = 180L
         private const val DOCK_CONTENT_FADE_OUT_MS = 140L
         private const val DOCK_FADE_OUT_MS = 250L
