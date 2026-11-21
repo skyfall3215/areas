@@ -909,9 +909,9 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 @Suppress("DEPRECATION")
                 packageManager.getPackageInfo(packageName, 0)
             }
-            info.versionName?.takeIf { it.isNotBlank() } ?: "1.0.5"
+            info.versionName?.takeIf { it.isNotBlank() } ?: "1.0.6"
         } catch (_: Exception) {
-            "1.0.5"
+            "1.0.6"
         }
     }
 

@@ -3,7 +3,7 @@
     <!-- Brand & Studio Header -->
     <string name="app_name">Areas</string>
     <string name="app_subtitle">Kablosuz &amp; USB İkinci Ekran Stüdyosu</string>
-    <string name="default_version_badge">v1.0.5</string>
+    <string name="default_version_badge">v1.0.6</string>
 
     <!-- Status Messages -->
     <string name="status_disconnected">Bağlantı Hazır — Bir bağlantı yöntemi seçin</string>
