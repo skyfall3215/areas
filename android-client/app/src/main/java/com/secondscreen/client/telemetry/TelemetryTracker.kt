@@ -12,6 +12,7 @@ data class TelemetrySnapshot(
     val captureMs: Double,
     val encodeMs: Double,
     val networkRttDiv2Ms: Double,
+    val queueWaitMs: Double = 0.0,
     val decodeMs: Double,
     val estimatedPipelineMs: Double,
     val lostPackets: Long = 0,
@@ -46,6 +47,7 @@ class TelemetryTracker {
     // Rolling averages for smooth HUD display
     private var avgCaptureMs = 0.0
     private var avgEncodeMs = 0.0
+    private var avgQueueWaitMs = 0.0
     private var avgDecodeMs = 0.0
 
     val currentTimeUs: Long
@@ -74,15 +76,27 @@ class TelemetryTracker {
         inputUnavailableCount.set(0)
         hostSentBitrateMbps = 0.0
         hostSentPacketsCount = 0L
+        avgCaptureMs = 0.0
+        avgEncodeMs = 0.0
+        avgQueueWaitMs = 0.0
+        avgDecodeMs = 0.0
+        lastNetworkRttDiv2Ms = 0.0
     }
 
     @Synchronized
-    fun onFrameDecoded(captureDurationUs: Int, encodeDurationUs: Int, decodeDurationNs: Long, payloadBytes: Int) {
+    fun onFrameDecoded(
+        captureDurationUs: Int,
+        encodeDurationUs: Int,
+        decodeDurationNs: Long,
+        payloadBytes: Int,
+        queueWaitNs: Long = 0L
+    ) {
         frameCount++
         totalBytesInPeriod += payloadBytes
 
         val capMs = captureDurationUs / 1000.0
         val encMs = encodeDurationUs / 1000.0
+        val queueMs = queueWaitNs / 1_000_000.0
         val decMs = decodeDurationNs / 1_000_000.0
 
         lastCaptureMs = capMs
@@ -92,6 +106,7 @@ class TelemetryTracker {
         // Exponential moving average (alpha = 0.1)
         avgCaptureMs = if (avgCaptureMs == 0.0) capMs else (avgCaptureMs * 0.9 + capMs * 0.1)
         avgEncodeMs = if (avgEncodeMs == 0.0) encMs else (avgEncodeMs * 0.9 + encMs * 0.1)
+        avgQueueWaitMs = if (avgQueueWaitMs == 0.0) queueMs else (avgQueueWaitMs * 0.9 + queueMs * 0.1)
         avgDecodeMs = if (avgDecodeMs == 0.0) decMs else (avgDecodeMs * 0.9 + decMs * 0.1)
 
         val now = System.nanoTime()
@@ -135,7 +150,7 @@ class TelemetryTracker {
 
     @Synchronized
     fun getSnapshot(): TelemetrySnapshot {
-        val estimatedTotal = avgCaptureMs + avgEncodeMs + lastNetworkRttDiv2Ms + avgDecodeMs
+        val estimatedTotal = avgCaptureMs + avgEncodeMs + lastNetworkRttDiv2Ms + avgQueueWaitMs + avgDecodeMs
         return TelemetrySnapshot(
             fps = currentFps,
             bitrateMbps = currentBitrateMbps,
@@ -144,6 +159,7 @@ class TelemetryTracker {
             captureMs = avgCaptureMs,
             encodeMs = avgEncodeMs,
             networkRttDiv2Ms = lastNetworkRttDiv2Ms,
+            queueWaitMs = avgQueueWaitMs,
             decodeMs = avgDecodeMs,
             estimatedPipelineMs = estimatedTotal,
             lostPackets = lostPacketsCount.get(),

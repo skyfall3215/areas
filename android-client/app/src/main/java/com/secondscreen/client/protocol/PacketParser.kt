@@ -7,11 +7,20 @@ import java.nio.ByteBuffer
 
 object PacketParser {
 
-    fun readPacket(inputStream: InputStream): Pair<FrameHeader, ByteArray> {
-        val headerBytes = ByteArray(ProtocolConstants.HEADER_SIZE)
-        readExactBytes(inputStream, headerBytes, 0, ProtocolConstants.HEADER_SIZE)
+    private val EMPTY_PAYLOAD = ByteArray(0)
 
-        val headerBuf = ByteBuffer.wrap(headerBytes)
+    fun readPacket(inputStream: InputStream): Pair<FrameHeader, ByteArray> {
+        return readPacket(inputStream, ByteArray(ProtocolConstants.HEADER_SIZE))
+    }
+
+    fun readPacket(inputStream: InputStream, headerScratch: ByteArray): Pair<FrameHeader, ByteArray> {
+        require(headerScratch.size >= ProtocolConstants.HEADER_SIZE) {
+            "headerScratch must be at least ${ProtocolConstants.HEADER_SIZE} bytes"
+        }
+
+        readExactBytes(inputStream, headerScratch, 0, ProtocolConstants.HEADER_SIZE)
+
+        val headerBuf = ByteBuffer.wrap(headerScratch, 0, ProtocolConstants.HEADER_SIZE)
         val header = FrameHeader.readFrom(headerBuf)
         val error = header.validate()
         if (error != null) {
@@ -23,7 +32,7 @@ object PacketParser {
             readExactBytes(inputStream, payloadBytes, 0, payloadBytes.size)
             payloadBytes
         } else {
-            ByteArray(0)
+            EMPTY_PAYLOAD
         }
 
         return Pair(header, payload)
@@ -57,6 +66,26 @@ object PacketSerializer {
         val packet = serializePacket(header, payload)
         outputStream.write(packet)
         outputStream.flush()
+    }
+
+    fun writePacket(
+        outputStream: OutputStream,
+        header: FrameHeader,
+        payload: ByteArray,
+        scratch: ByteArray
+    ) {
+        val totalSize = ProtocolConstants.HEADER_SIZE + payload.size
+        if (totalSize <= scratch.size) {
+            val buffer = ByteBuffer.wrap(scratch, 0, totalSize)
+            header.writeTo(buffer)
+            if (payload.isNotEmpty()) {
+                System.arraycopy(payload, 0, scratch, ProtocolConstants.HEADER_SIZE, payload.size)
+            }
+            outputStream.write(scratch, 0, totalSize)
+            outputStream.flush()
+        } else {
+            writePacket(outputStream, header, payload)
+        }
     }
 }
 

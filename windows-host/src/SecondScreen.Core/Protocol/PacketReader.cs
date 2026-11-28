@@ -1,3 +1,5 @@
+using System.Buffers;
+
 namespace SecondScreen.Core.Protocol;
 
 public static class PacketReader
@@ -6,10 +8,18 @@ public static class PacketReader
         Stream stream,
         CancellationToken cancellationToken = default)
     {
-        byte[] headerBuffer = new byte[ProtocolConstants.HeaderSize];
-        await ReadExactBytesAsync(stream, headerBuffer, cancellationToken).ConfigureAwait(false);
+        FrameHeader header;
+        byte[] headerBuffer = ArrayPool<byte>.Shared.Rent(ProtocolConstants.HeaderSize);
+        try
+        {
+            await ReadExactBytesAsync(stream, headerBuffer.AsMemory(0, ProtocolConstants.HeaderSize), cancellationToken).ConfigureAwait(false);
+            header = FrameHeader.ReadFrom(headerBuffer.AsSpan(0, ProtocolConstants.HeaderSize));
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(headerBuffer);
+        }
 
-        FrameHeader header = FrameHeader.ReadFrom(headerBuffer);
         if (!header.Validate(out string? error))
         {
             throw new InvalidDataException($"Protocol error: {error}");

@@ -35,6 +35,7 @@ public sealed class MfH264Encoder : IDisposable
     private bool _isDisposed;
     private bool _isAsync;
     private int _pendingInputRequests;
+    private readonly Queue<EncodedPacket> _pendingOutputs = new();
 
     public int Width => _width;
     public int Height => _height;
@@ -62,6 +63,7 @@ public sealed class MfH264Encoder : IDisposable
         _bitrateBps = bitrateBps;
         _nv12Size = width * height * 3 / 2;
         _pendingInputRequests = 0;
+        _pendingOutputs.Clear();
         IsHardwareAccelerated = false;
         EncoderName = "None";
         FallbackReason = fallbackReason;
@@ -218,7 +220,7 @@ public sealed class MfH264Encoder : IDisposable
                         // Sunshine-style strict CBR: VBV = exactly one frame, so no frame can exceed
                         // its per-frame budget and queue up in the network pipe.
                         CodecApiGuids.TrySet(codecApi, CodecApiGuids.MaxBitRate, (uint)_bitrateBps);
-                        uint bufSize = (uint)(_bitrateBps / _fps); // VBV size is in bits
+                        uint bufSize = (uint)((long)_bitrateBps * 2 / _fps); // VBV size is in bits (2 frames for IDR headroom)
                         CodecApiGuids.TrySet(codecApi, CodecApiGuids.BufferSize, bufSize);
                         CodecApiGuids.TrySet(codecApi, CodecApiGuids.AdaptiveMode, (uint)0);
                         // Long GOP: IDRs only on demand (client KEYFRAME_REQ) to avoid periodic bitrate spikes
@@ -275,6 +277,35 @@ public sealed class MfH264Encoder : IDisposable
     public void RequestKeyframe()
     {
         _requestKeyframe = true;
+    }
+
+    public bool SetBitrate(int newBitrateBps)
+    {
+        if (_isDisposed || _encoder == null)
+        {
+            return false;
+        }
+
+        int clamped = Math.Clamp(newBitrateBps, 1_000_000, 60_000_000);
+        _bitrateBps = clamped;
+
+        if (_codecApi == null)
+        {
+            return false;
+        }
+
+        try
+        {
+            // Only update mean/max bitrate mid-stream; dynamic VBV BufferSize mutation
+            // can stall or be rejected by hardware H.264 MFTs.
+            CodecApiGuids.TrySet(_codecApi, CodecApiGuids.MeanBitRate, (uint)clamped);
+            CodecApiGuids.TrySet(_codecApi, CodecApiGuids.MaxBitRate, (uint)clamped);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     public unsafe EncodedPacket? EncodeBgraFrame(ReadOnlySpan<byte> bgra, long timestampUs)
@@ -367,7 +398,7 @@ public sealed class MfH264Encoder : IDisposable
             {
                 CodecApiGuids.TrySet(_codecApi, CodecApiGuids.ForceKeyframe, (uint)1);
             }
-            _encoder.Attributes?.Set(ForceKeyframeGuid, 1);
+            try { _encoder.Attributes?.Set(ForceKeyframeGuid, 1); } catch { }
             _requestKeyframe = false;
         }
 
@@ -377,14 +408,21 @@ public sealed class MfH264Encoder : IDisposable
             while (_pendingInputRequests <= 0)
             {
                 using var ev = _eventGen.GetEvent(0);
+                if (ev.EventType == MediaEventTypes.Error)
+                {
+                    throw new InvalidOperationException($"Async MFT error event ({ev.Status})");
+                }
                 if (ev.EventType == MediaEventTypes.TransformNeedInput)
                 {
                     _pendingInputRequests++;
                 }
                 else if (ev.EventType == MediaEventTypes.TransformHaveOutput)
                 {
-                    // Drain stale output if any arrived before NeedInput
-                    TryPullOutputSample();
+                    var pkt = TryPullOutputSample();
+                    if (pkt != null)
+                    {
+                        _pendingOutputs.Enqueue(pkt);
+                    }
                 }
             }
 
@@ -395,14 +433,23 @@ public sealed class MfH264Encoder : IDisposable
             while (true)
             {
                 using var ev = _eventGen.GetEvent(0);
+                if (ev.EventType == MediaEventTypes.Error)
+                {
+                    throw new InvalidOperationException($"Async MFT error event ({ev.Status})");
+                }
                 if (ev.EventType == MediaEventTypes.TransformHaveOutput)
                 {
-                    return TryPullOutputSample();
+                    var pkt = TryPullOutputSample();
+                    if (pkt != null)
+                    {
+                        _pendingOutputs.Enqueue(pkt);
+                    }
+                    return _pendingOutputs.Count > 0 ? _pendingOutputs.Dequeue() : null;
                 }
                 if (ev.EventType == MediaEventTypes.TransformNeedInput)
                 {
                     _pendingInputRequests++;
-                    return null;
+                    return _pendingOutputs.Count > 0 ? _pendingOutputs.Dequeue() : null;
                 }
             }
         }
@@ -541,6 +588,7 @@ public sealed class MfH264Encoder : IDisposable
             _eventGen?.Dispose();
             _eventGen = null;
             _isAsync = false;
+            _pendingOutputs.Clear();
             _codecApi = null;
             _reusableInSample?.Dispose();
             _reusableInSample = null;

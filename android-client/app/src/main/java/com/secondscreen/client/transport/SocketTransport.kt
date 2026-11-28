@@ -3,6 +3,7 @@ package com.secondscreen.client.transport
 import com.secondscreen.client.protocol.FrameHeader
 import com.secondscreen.client.protocol.PacketParser
 import com.secondscreen.client.protocol.PacketSerializer
+import com.secondscreen.client.protocol.ProtocolConstants
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -33,6 +34,8 @@ class SocketTransport(
     private var inputStream: BufferedInputStream? = null
     private var outputStream: BufferedOutputStream? = null
     private val sendMutex = Mutex()
+    private val readHeaderScratch = ByteArray(ProtocolConstants.HEADER_SIZE)
+    private val writeScratch = ByteArray(4096)
 
     override val isConnected: Boolean
         get() = socket?.isConnected == true && socket?.isClosed == false
@@ -40,8 +43,9 @@ class SocketTransport(
     suspend fun connect() = withContext(Dispatchers.IO) {
         val rawSocket = Socket()
         rawSocket.tcpNoDelay = true
-        rawSocket.sendBufferSize = 512 * 1024
-        rawSocket.receiveBufferSize = 512 * 1024
+        rawSocket.sendBufferSize = 32 * 1024
+        rawSocket.receiveBufferSize = 64 * 1024
+        try { rawSocket.trafficClass = 0x88 } catch (_: Exception) {}
 
         try {
             rawSocket.connect(InetSocketAddress(host, port), connectTimeoutMs)
@@ -76,20 +80,20 @@ class SocketTransport(
         }
 
         socket = tlsSocket
-        inputStream = BufferedInputStream(tlsSocket.getInputStream(), 512 * 1024)
-        outputStream = BufferedOutputStream(tlsSocket.getOutputStream(), 512 * 1024)
+        inputStream = BufferedInputStream(tlsSocket.getInputStream(), 32 * 1024)
+        outputStream = BufferedOutputStream(tlsSocket.getOutputStream(), 16 * 1024)
     }
 
     override suspend fun sendPacket(header: FrameHeader, payload: ByteArray) = withContext(Dispatchers.IO) {
         val os = outputStream ?: throw IllegalStateException("Transport not connected")
         sendMutex.withLock {
-            PacketSerializer.writePacket(os, header, payload)
+            PacketSerializer.writePacket(os, header, payload, writeScratch)
         }
     }
 
     override suspend fun receivePacket(): Pair<FrameHeader, ByteArray> = withContext(Dispatchers.IO) {
         val isStream = inputStream ?: throw IllegalStateException("Transport not connected")
-        PacketParser.readPacket(isStream)
+        PacketParser.readPacket(isStream, readHeaderScratch)
     }
 
     override fun close() {

@@ -70,6 +70,7 @@
     <string name="hud_row_capture">Yakalama (Capture)</string>
     <string name="hud_row_encode">Kodlama (Encode)</string>
     <string name="hud_row_network">Ağ (RTT/2)</string>
+    <string name="hud_row_queue">Kuyruk (Queue)</string>
     <string name="hud_row_decode">Çözme (Decode)</string>
     <string name="hud_diag_drop">Drop: %1$d</string>
     <string name="hud_diag_idr">IDR: %1$d</string>

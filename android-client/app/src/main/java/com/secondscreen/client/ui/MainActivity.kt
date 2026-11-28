@@ -84,7 +84,8 @@ private sealed interface DecodeItem {
         val frameNumber: Long,
         val captureUs: Int,
         val encodeUs: Int,
-        val wireBytes: Int
+        val wireBytes: Int,
+        val enqueuedAtNs: Long = System.nanoTime()
     ) : DecodeItem
 }
 
@@ -101,10 +102,12 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
     private lateinit var binding: ActivityMainBinding
     @Volatile private var videoDecoder: VideoDecoder? = null
+    @Volatile private var latestSpsPps: ByteArray? = null
+    @Volatile private var activeSurfaceResetHandler: (() -> Unit)? = null
     private var sessionJob: Job? = null
     private var isSurfaceAvailable = false
-    private var lastStreamWidth = 1920
-    private var lastStreamHeight = 1080
+    @Volatile private var lastStreamWidth = 1920
+    @Volatile private var lastStreamHeight = 1080
     private val telemetry = TelemetryTracker()
     private var isStatsMenuOpen = false
     private var activeTransport: SocketTransport? = null
@@ -1253,6 +1256,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
     private suspend fun runStreamingSession(host: String, port: Int) = kotlinx.coroutines.coroutineScope {
         val transport = SocketTransport(host, port, connectTimeoutMs = 2500)
         activeTransport = transport
+        latestSpsPps = null
         acquireWifiLock()
 
         try {
@@ -1408,25 +1412,43 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 }
             }
 
+            activeSurfaceResetHandler = {
+                waitingForKeyframe.set(true)
+                maybeRequestKeyframe(0L)
+            }
+
             // ---- bounded hand-off between reader and decoder ----
-            val decodeQueue = Channel<DecodeItem>(capacity = 16)
+            val decodeQueue = Channel<DecodeItem>(capacity = 4)
             val decodeDispatcher = java.util.concurrent.Executors
                 .newSingleThreadExecutor { r -> Thread(r, "AreasDecode") }
                 .asCoroutineDispatcher()
-            var latestConfig: DecodeItem.Config? = null // touched by the reader thread only
 
             // Reader thread only. Never blocks: if the decoder fell behind, resync instead of waiting.
             val enqueue: (DecodeItem) -> Unit = { item ->
                 if (!decodeQueue.trySend(item).isSuccess) {
-                    var dropped = 1
-                    while (decodeQueue.tryReceive().isSuccess) dropped++
-                    repeat(dropped) { telemetry.onFrameDropped() }
+                    var droppedFrames = if (item is DecodeItem.Frame) 1 else 0
+                    var drainedConfig = false
+                    while (true) {
+                        val drained = decodeQueue.tryReceive().getOrNull() ?: break
+                        if (drained is DecodeItem.Config) {
+                            drainedConfig = true
+                        } else {
+                            droppedFrames++
+                        }
+                    }
+                    repeat(droppedFrames) { telemetry.onFrameDropped() }
+                    val cachedSpsPps = latestSpsPps
                     if (item is DecodeItem.Frame && item.isKeyframe) {
-                        latestConfig?.let { decodeQueue.trySend(it) }
+                        if (cachedSpsPps != null) {
+                            decodeQueue.trySend(DecodeItem.Config(cachedSpsPps))
+                        }
                         decodeQueue.trySend(item) // fresh IDR resyncs everything
                     } else if (item is DecodeItem.Config) {
                         decodeQueue.trySend(item)
                     } else {
+                        if (cachedSpsPps != null && (drainedConfig || videoDecoder?.isConfigured != true)) {
+                            decodeQueue.trySend(DecodeItem.Config(cachedSpsPps))
+                        }
                         waitingForKeyframe.set(true)
                         maybeRequestKeyframe((item as DecodeItem.Frame).frameNumber)
                     }
@@ -1440,9 +1462,8 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                     when (pktHeader.msgType) {
                         MessageType.VIDEO_CONFIG -> {
                             val config = VideoConfigMessage.readPayloadFrom(pktPayload)
-                            val item = DecodeItem.Config(config.spsPpsData)
-                            latestConfig = item
-                            enqueue(item)
+                            latestSpsPps = config.spsPpsData
+                            enqueue(DecodeItem.Config(config.spsPpsData))
                         }
                         MessageType.VIDEO_FRAME -> {
                             val frame = VideoFrameMessage.readPayloadFrom(pktPayload, pktHeader.flags)
@@ -1496,6 +1517,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 for (item in decodeQueue) {
                     when (item) {
                         is DecodeItem.Config -> {
+                            latestSpsPps = item.spsPps
                             try {
                                 videoDecoder?.configure(lastStreamWidth, lastStreamHeight, item.spsPps)
                             } catch (e: Exception) {
@@ -1505,6 +1527,31 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                             }
                         }
                         is DecodeItem.Frame -> {
+                            val decoder = videoDecoder
+                            if (decoder != null && !decoder.isConfigured) {
+                                val spsPps = latestSpsPps
+                                if (spsPps != null) {
+                                    val configuredNow = try {
+                                        decoder.configure(lastStreamWidth, lastStreamHeight, spsPps)
+                                        decoder.isConfigured
+                                    } catch (e: Exception) {
+                                        Log.e("StreamDecode", "auto-configure failed", e)
+                                        false
+                                    }
+                                    if (!configuredNow || !item.isKeyframe) {
+                                        waitingForKeyframe.set(true)
+                                        telemetry.onFrameDropped()
+                                        maybeRequestKeyframe(item.frameNumber)
+                                        continue
+                                    }
+                                } else {
+                                    waitingForKeyframe.set(true)
+                                    telemetry.onFrameDropped()
+                                    maybeRequestKeyframe(item.frameNumber)
+                                    continue
+                                }
+                            }
+
                             if (item.isKeyframe) {
                                 waitingForKeyframe.set(false)
                             } else if (waitingForKeyframe.get()) {
@@ -1512,15 +1559,28 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                                 continue
                             }
 
+                            val queueWaitNs = (System.nanoTime() - item.enqueuedAtNs).coerceAtLeast(0L)
                             val t0 = System.nanoTime()
-                            val result = videoDecoder?.decodeFrame(item.nal, item.ptsUs, item.isKeyframe)
+                            val result = decoder?.decodeFrame(item.nal, item.ptsUs, item.isKeyframe)
                                 ?: DecodeResult.OK // surface not available yet: same as before
                             val decNs = System.nanoTime() - t0
 
                             if (result == DecodeResult.OK) {
-                                telemetry.onFrameDecoded(item.captureUs, item.encodeUs, decNs, item.wireBytes)
+                                val effectiveDecNs = decoder?.lastRenderDecodeNs?.takeIf { it > 0L } ?: decNs
+                                telemetry.onFrameDecoded(item.captureUs, item.encodeUs, effectiveDecNs, item.wireBytes, queueWaitNs)
                             } else {
                                 if (result == DecodeResult.NO_INPUT) telemetry.onInputUnavailable()
+                                val currentDecoder = videoDecoder
+                                if (result == DecodeResult.ERROR && currentDecoder != null && !currentDecoder.isConfigured) {
+                                    val spsPps = latestSpsPps
+                                    if (spsPps != null) {
+                                        try {
+                                            currentDecoder.configure(lastStreamWidth, lastStreamHeight, spsPps)
+                                        } catch (e: Exception) {
+                                            Log.e("StreamDecode", "reconfigure after error failed", e)
+                                        }
+                                    }
+                                }
                                 waitingForKeyframe.set(true)
                                 telemetry.onFrameDropped()
                                 maybeRequestKeyframe(item.frameNumber)
@@ -1534,6 +1594,8 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
                 readerJob.join()
             } finally {
                 isStreamingActive = false
+                activeSurfaceResetHandler = null
+                latestSpsPps = null
                 withContext(NonCancellable + Dispatchers.Main.immediate) {
                     resetDockForDisconnectedState()
                 }
@@ -1563,6 +1625,7 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
         binding.txtHudCaptureValue.text = String.format(Locale.US, "%.1f ms", s.captureMs)
         binding.txtHudEncodeValue.text = String.format(Locale.US, "%.1f ms", s.encodeMs)
         binding.txtHudNetworkValue.text = String.format(Locale.US, "%.1f ms", s.networkRttDiv2Ms)
+        binding.txtHudQueueValue.text = String.format(Locale.US, "%.1f ms", s.queueWaitMs)
         binding.txtHudDecodeValue.text = String.format(Locale.US, "%.1f ms", s.decodeMs)
 
         val healthColorRes = when {
@@ -1606,7 +1669,19 @@ class MainActivity : AppCompatActivity(), SurfaceHolder.Callback {
 
     override fun surfaceCreated(holder: SurfaceHolder) {
         isSurfaceAvailable = true
-        videoDecoder = VideoDecoder(holder.surface)
+        val decoder = VideoDecoder(holder.surface)
+        val spsPps = latestSpsPps
+        if (isStreamingActive && spsPps != null && lastStreamWidth > 0 && lastStreamHeight > 0) {
+            try {
+                decoder.configure(lastStreamWidth, lastStreamHeight, spsPps)
+            } catch (e: Exception) {
+                Log.e("StreamDecode", "surfaceCreated configure failed", e)
+            }
+        }
+        videoDecoder = decoder
+        if (isStreamingActive) {
+            activeSurfaceResetHandler?.invoke()
+        }
     }
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}

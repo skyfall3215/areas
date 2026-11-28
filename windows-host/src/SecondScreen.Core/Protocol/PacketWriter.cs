@@ -1,3 +1,5 @@
+using System.Buffers;
+
 namespace SecondScreen.Core.Protocol;
 
 public static class PacketWriter
@@ -19,14 +21,22 @@ public static class PacketWriter
         ReadOnlyMemory<byte> payload,
         CancellationToken cancellationToken = default)
     {
-        byte[] buffer = new byte[ProtocolConstants.HeaderSize + payload.Length];
-        header.WriteTo(buffer.AsSpan(0, ProtocolConstants.HeaderSize));
-        if (!payload.IsEmpty)
+        int totalLength = ProtocolConstants.HeaderSize + payload.Length;
+        byte[] buffer = ArrayPool<byte>.Shared.Rent(totalLength);
+        try
         {
-            payload.Span.CopyTo(buffer.AsSpan(ProtocolConstants.HeaderSize));
-        }
+            header.WriteTo(buffer.AsSpan(0, ProtocolConstants.HeaderSize));
+            if (!payload.IsEmpty)
+            {
+                payload.Span.CopyTo(buffer.AsSpan(ProtocolConstants.HeaderSize, payload.Length));
+            }
 
-        await stream.WriteAsync(buffer, cancellationToken).ConfigureAwait(false);
+            await stream.WriteAsync(buffer.AsMemory(0, totalLength), cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
     }
 }
 

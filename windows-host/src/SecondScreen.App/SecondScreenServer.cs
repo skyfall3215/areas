@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
@@ -139,7 +140,7 @@ public sealed class SecondScreenServer : IDisposable
 
                 Log($"[+] Tablet bağlandı: {remoteEp} [Mod: {modeStr}]");
 
-                await HandleClientSessionAsync(tcpClient, modeStr, ct);
+                await HandleClientSessionAsync(tcpClient, modeStr, isUsb, isHotspot, ct);
             }
             catch (OperationCanceledException)
             {
@@ -167,7 +168,7 @@ public sealed class SecondScreenServer : IDisposable
         }
     }
 
-    private async Task HandleClientSessionAsync(TcpClient tcpClient, string transportMode, CancellationToken ct)
+    private async Task HandleClientSessionAsync(TcpClient tcpClient, string transportMode, bool isUsb, bool isHotspot, CancellationToken ct)
     {
         using var sessionCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         await using var transport = await TcpTransport.CreateServerTransportAsync(tcpClient, _tlsCert, sessionCts.Token);
@@ -239,6 +240,20 @@ public sealed class SecondScreenServer : IDisposable
         ushort streamHeight = targetDisplay.Bounds.Height > 0 ? (ushort)(targetDisplay.Bounds.Height & ~1) : (ushort)(hello.NativeHeight & ~1);
         ushort targetFps = hello.MaxFps >= 30 ? (ushort)Math.Clamp((int)hello.MaxFps, 30, 120) : (ushort)60;
         uint bitrateBps = hello.PreferredBitrateKbps > 0 ? (uint)hello.PreferredBitrateKbps * 1000 : 20_000_000;
+        if (isHotspot)
+        {
+            Log("[İPUCU] Hotspot bağlantısında daha düşük gecikme ve kararlı akış için Windows Mobil Etkin Nokta bandını 5 GHz seçmeniz önerilir.");
+            uint capped = Math.Min(bitrateBps, 8_000_000u);
+            if (capped < bitrateBps)
+            {
+                Log($"[+] Hotspot modu: bitrate {bitrateBps / 1_000_000.0:F1} Mbps -> {capped / 1_000_000.0:F1} Mbps olarak sınırlandı.");
+            }
+            bitrateBps = capped;
+        }
+        AdaptiveBitrateController? aimd = !isUsb
+            ? new AdaptiveBitrateController(maxBitrateBps: bitrateBps, minBitrateBps: AdaptiveBitrateController.DefaultMinBitrateBps)
+            : null;
+        double targetFrameIntervalMs = 1000.0 / targetFps;
         uint sessionId = (uint)Random.Shared.Next(1, int.MaxValue);
 
         // 4. Send HELLO_ACK
@@ -260,6 +275,8 @@ public sealed class SecondScreenServer : IDisposable
         int sequence = 2;
         uint sentFrameCount = 0;
         int requestKeyframeFlag = 0;
+        long lastKeyframeReqTicks = 0;
+        long keyframeDebounceTicks = Stopwatch.Frequency / 2;
 
         using var touchInjector = new Win32TouchInjector();
         touchInjector.ScreenBounds = targetDisplay.Bounds;
@@ -278,12 +295,20 @@ public sealed class SecondScreenServer : IDisposable
                     var (inHeader, inPayload) = await transport.ReceivePacketAsync(sessionCts.Token);
                     if (inHeader.MsgType == MessageType.KeyframeReq)
                     {
-                        Interlocked.Exchange(ref requestKeyframeFlag, 1);
+                        aimd?.OnKeyframeRequested();
+                        long nowTicks = Stopwatch.GetTimestamp();
+                        long prevTicks = Interlocked.Read(ref lastKeyframeReqTicks);
+                        if (nowTicks - prevTicks >= keyframeDebounceTicks &&
+                            Interlocked.CompareExchange(ref lastKeyframeReqTicks, nowTicks, prevTicks) == prevTicks)
+                        {
+                            Interlocked.Exchange(ref requestKeyframeFlag, 1);
+                        }
                     }
                     else if (inHeader.MsgType == MessageType.Ping)
                     {
                         var ping = PingMessage.ReadPayloadFrom(inPayload);
-                        var pong = new PongMessage(ping.PingId, ping.OriginTimeUs, (uint)(bitrateBps / 1000), sentFrameCount);
+                        uint activeBitrateBps = Volatile.Read(ref bitrateBps);
+                        var pong = new PongMessage(ping.PingId, ping.OriginTimeUs, (uint)(activeBitrateBps / 1000), sentFrameCount);
                         byte[] pongPayload = new byte[PongMessage.PayloadSize];
                         pong.WritePayloadTo(pongPayload);
 
@@ -300,7 +325,8 @@ public sealed class SecondScreenServer : IDisposable
                         var pong = PongMessage.ReadPayloadFrom(inPayload);
                         if (rttTracker.RecordPong(pong, rttTracker.CurrentTimeUs))
                         {
-                            OnMetricsUpdated?.Invoke(rttTracker.LastRttMs, targetFps, bitrateBps / 1_000_000.0);
+                            aimd?.RecordRttSample(rttTracker.LastRttMs);
+                            OnMetricsUpdated?.Invoke(rttTracker.LastRttMs, targetFps, Volatile.Read(ref bitrateBps) / 1_000_000.0);
                         }
                     }
                     else if (inHeader.MsgType == MessageType.TouchEvent)
@@ -352,7 +378,7 @@ public sealed class SecondScreenServer : IDisposable
         }, sessionCts.Token);
 
         // 8. Decoupled video sender (small capacity = zero bufferbloat, ultra-low latency)
-        var videoChannel = Channel.CreateBounded<(FrameHeader Header, byte[] Payload)>(
+        var videoChannel = Channel.CreateBounded<(FrameHeader Header, byte[] Buffer, int Length, bool IsPooled)>(
             new BoundedChannelOptions(16)
             {
                 FullMode = BoundedChannelFullMode.Wait,
@@ -363,6 +389,7 @@ public sealed class SecondScreenServer : IDisposable
 
         var senderTask = Task.Run(async () =>
         {
+            var sendSw = new Stopwatch();
             try
             {
                 var reader = videoChannel.Reader;
@@ -372,17 +399,49 @@ public sealed class SecondScreenServer : IDisposable
                     {
                         try
                         {
-                            await transport.SendPacketAsync(item.Header, item.Payload, sessionCts.Token).ConfigureAwait(false);
+                            bool isVideoFrame = item.Header.MsgType == MessageType.VideoFrame;
+                            if (isVideoFrame && aimd != null)
+                            {
+                                sendSw.Restart();
+                            }
+
+                            await transport.SendPacketAsync(item.Header, item.Buffer.AsMemory(0, item.Length), sessionCts.Token).ConfigureAwait(false);
+
+                            if (isVideoFrame && aimd != null)
+                            {
+                                sendSw.Stop();
+                                aimd.RecordSendSample(sendSw.Elapsed.TotalMilliseconds, targetFrameIntervalMs);
+                            }
                         }
                         finally
                         {
+                            if (item.IsPooled)
+                            {
+                                ArrayPool<byte>.Shared.Return(item.Buffer);
+                            }
                             if (item.Header.MsgType == MessageType.VideoFrame)
+                            {
                                 Interlocked.Decrement(ref videoInFlight);
+                            }
                         }
                     }
                 }
             }
             catch { }
+            finally
+            {
+                while (videoChannel.Reader.TryRead(out var remaining))
+                {
+                    if (remaining.IsPooled)
+                    {
+                        ArrayPool<byte>.Shared.Return(remaining.Buffer);
+                    }
+                    if (remaining.Header.MsgType == MessageType.VideoFrame)
+                    {
+                        Interlocked.Decrement(ref videoInFlight);
+                    }
+                }
+            }
         }, sessionCts.Token);
 
         // 9. Dedicated synchronous capture & encode thread (guarantees clean WinSta0\Default desktop attachment and 60.0 FPS pacing)
@@ -400,7 +459,7 @@ public sealed class SecondScreenServer : IDisposable
                 bool captureOk = capture.Initialize(targetDisplay.DeviceName, targetDisplay.Bounds);
 
                 using var encoder = new MfH264Encoder();
-                encoder.Initialize(streamWidth, streamHeight, targetFps, (int)bitrateBps);
+                encoder.Initialize(streamWidth, streamHeight, targetFps, (int)Volatile.Read(ref bitrateBps));
 
                 ActiveEncoderLabel = encoder.StatusLabel;
                 IsHardwareEncoderActive = encoder.IsHardwareAccelerated;
@@ -418,11 +477,13 @@ public sealed class SecondScreenServer : IDisposable
                 }
 
                 long targetFrameIntervalTicks = Stopwatch.Frequency / targetFps;
-                int captureTimeoutMs = Math.Max(1, 1000 / targetFps);
+                int captureTimeoutMs = Math.Clamp(1000 / targetFps / 2, 4, 8);
                 var stopwatch = Stopwatch.StartNew();
                 long nextTargetTicks = stopwatch.ElapsedTicks;
                 bool configSent = false;
                 bool sawFirstNewDxgiFrame = false;
+                int keyframeFlushTicks = 0;
+                long lastSentFrameMs = 0;
                 byte[] testPatternBgra = new byte[streamWidth * streamHeight * 4];
 
                 byte[]? lastValidBgra = null;
@@ -441,6 +502,16 @@ public sealed class SecondScreenServer : IDisposable
 
                     try
                     {
+                        if (aimd != null && aimd.TryGetBitrateUpdate(out uint newBps))
+                        {
+                            if (encoder.SetBitrate((int)newBps))
+                            {
+                                uint prevBps = Volatile.Read(ref bitrateBps);
+                                Volatile.Write(ref bitrateBps, newBps);
+                                Log($"[AIMD] Bitrate ayarlandı: {prevBps / 1_000_000.0:F2} Mbps -> {newBps / 1_000_000.0:F2} Mbps");
+                            }
+                        }
+
                         // Sunshine-style backpressure: if the network is still pushing the previous frame,
                         // skip this tick entirely (no capture, no encode). The reference chain stays intact,
                         // so no IDR is needed and the next frame shown is always the freshest one.
@@ -449,10 +520,11 @@ public sealed class SecondScreenServer : IDisposable
                             goto Pace;
                         }
 
-                        if (Interlocked.Exchange(ref requestKeyframeFlag, 0) == 1 ||
-                            frameNumber == 45 || frameNumber == 90 || frameNumber == 150)
+                        bool keyframeRequested = Interlocked.Exchange(ref requestKeyframeFlag, 0) == 1 || frameNumber == 30;
+                        if (keyframeRequested)
                         {
                             encoder.RequestKeyframe();
+                            keyframeFlushTicks = 3;
                         }
 
                         byte[] bgraData;
@@ -471,16 +543,22 @@ public sealed class SecondScreenServer : IDisposable
                             bool gotBgra = frame?.RgbaData != null && frame.RgbaData.Length >= streamWidth * streamHeight * 4;
                             if (gotNv12 || gotBgra)
                             {
+                                if (frame != null && !frame.IsNew && frameNumber > 0 && !keyframeRequested && !frame.ForceKeyframe &&
+                                    keyframeFlushTicks == 0 && sawFirstNewDxgiFrame && (stopwatch.ElapsedMilliseconds - lastSentFrameMs) < 500)
+                                {
+                                    goto Pace;
+                                }
                                 bgraData = gotNv12 ? frame!.Nv12Data! : frame!.RgbaData!;
                                 isNv12 = gotNv12;
                                 lastValidBgra = bgraData;
                                 lastValidIsNv12 = isNv12;
                                 // When DWM finishes painting the newly extended virtual desktop for the first time,
                                 // or immediately after returning from a UAC prompt, force an IDR keyframe!
-                                if (frame.ForceKeyframe || (frame.IsNew && !sawFirstNewDxgiFrame))
+                                if (frame!.ForceKeyframe || (frame.IsNew && !sawFirstNewDxgiFrame))
                                 {
                                     sawFirstNewDxgiFrame = true;
                                     encoder.RequestKeyframe();
+                                    keyframeFlushTicks = 3;
                                 }
                             }
                             else if (lastValidBgra != null)
@@ -526,6 +604,15 @@ public sealed class SecondScreenServer : IDisposable
 
                         if (encoded != null)
                         {
+                            if (encoded.IsKeyframe)
+                            {
+                                keyframeFlushTicks = 0;
+                            }
+                            else if (keyframeFlushTicks > 0)
+                            {
+                                keyframeFlushTicks--;
+                            }
+
                             if (encoded.SpsPpsConfig != null && (!configSent || encoded.IsKeyframe))
                             {
                                 var cfgHeader = FrameHeader.Create(
@@ -533,8 +620,10 @@ public sealed class SecondScreenServer : IDisposable
                                     (uint)encoded.SpsPpsConfig.Length,
                                     sequence: (ushort)(Interlocked.Increment(ref sequence) & 0xFFFF),
                                     timestampUs: (uint)frameStartUs);
-                                videoChannel.Writer.TryWrite((cfgHeader, encoded.SpsPpsConfig));
-                                configSent = true;
+                                if (videoChannel.Writer.TryWrite((cfgHeader, encoded.SpsPpsConfig, encoded.SpsPpsConfig.Length, false)))
+                                {
+                                    configSent = true;
+                                }
                             }
 
                             {
@@ -546,20 +635,37 @@ public sealed class SecondScreenServer : IDisposable
                                     NalData: encoded.Data,
                                     IsKeyframe: encoded.IsKeyframe);
 
-                                byte[] framePayload = new byte[frameMsg.PayloadSize];
-                                frameMsg.WritePayloadTo(framePayload);
-
-                                var frameHeader = FrameHeader.Create(
-                                    MessageType.VideoFrame,
-                                    (uint)framePayload.Length,
-                                    sequence: (ushort)(Interlocked.Increment(ref sequence) & 0xFFFF),
-                                    timestampUs: (uint)frameStartUs,
-                                    flags: frameMsg.GetFlags());
-
-                                Interlocked.Increment(ref videoInFlight);
-                                if (!videoChannel.Writer.TryWrite((frameHeader, framePayload)))
+                                int payloadSize = frameMsg.PayloadSize;
+                                byte[] framePayload = ArrayPool<byte>.Shared.Rent(payloadSize);
+                                bool handedOff = false;
+                                try
                                 {
-                                    Interlocked.Decrement(ref videoInFlight);
+                                    frameMsg.WritePayloadTo(framePayload.AsSpan(0, payloadSize));
+
+                                    var frameHeader = FrameHeader.Create(
+                                        MessageType.VideoFrame,
+                                        (uint)payloadSize,
+                                        sequence: (ushort)(Interlocked.Increment(ref sequence) & 0xFFFF),
+                                        timestampUs: (uint)frameStartUs,
+                                        flags: frameMsg.GetFlags());
+
+                                    Interlocked.Increment(ref videoInFlight);
+                                    if (!videoChannel.Writer.TryWrite((frameHeader, framePayload, payloadSize, true)))
+                                    {
+                                        Interlocked.Decrement(ref videoInFlight);
+                                    }
+                                    else
+                                    {
+                                        handedOff = true;
+                                        lastSentFrameMs = stopwatch.ElapsedMilliseconds;
+                                    }
+                                }
+                                finally
+                                {
+                                    if (!handedOff)
+                                    {
+                                        ArrayPool<byte>.Shared.Return(framePayload);
+                                    }
                                 }
                             }
                         }
@@ -614,6 +720,13 @@ public sealed class SecondScreenServer : IDisposable
         {
             videoChannel.Writer.TryComplete();
             try { await senderTask; } catch { }
+            while (videoChannel.Reader.TryRead(out var leftover))
+            {
+                if (leftover.IsPooled)
+                {
+                    ArrayPool<byte>.Shared.Return(leftover.Buffer);
+                }
+            }
             sessionCts.Cancel();
             try { await Task.WhenAll(receiveTask, pingTask); } catch { }
             Log($"[-] Tablet bağlantısı sonlandı. Toplam gönderilen kare: {finalFrameNumber}");

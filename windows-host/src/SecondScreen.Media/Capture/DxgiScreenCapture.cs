@@ -50,6 +50,8 @@ public sealed class DxgiScreenCapture : IDisposable
     private bool _hasVisibleDesktop;
     private long _lastPresentTimeUs;
     private long _lastInitAttemptTicks;
+    private int _lastCursorX = int.MinValue;
+    private int _lastCursorY = int.MinValue;
     private bool _isDisposed;
 
     public int Width => _width;
@@ -79,6 +81,8 @@ public sealed class DxgiScreenCapture : IDisposable
         try { _device?.Dispose(); } catch { }
         _device = null;
         _hasVisibleDesktop = false;
+        _lastCursorX = int.MinValue;
+        _lastCursorY = int.MinValue;
     }
 
     public bool Initialize(string? targetDeviceName = null, int outputIndex = 0)
@@ -295,7 +299,45 @@ public sealed class DxgiScreenCapture : IDisposable
 
             if (result == DxgiResultCode.WaitTimeout)
             {
-                return CachedFrame();
+                bool hasPt = GetCursorPos(out var pt);
+                bool cursorMoved = !hasPt || pt.X != _lastCursorX || pt.Y != _lastCursorY;
+                bool hasGpuCache = _gpu != null && _hasGpuFrame && _lastNv12Valid && _nv12Data != null;
+                bool hasCpuCache = _gpu == null && _hasAnySurface && _reusableRgbaData != null;
+                if (_hasVisibleDesktop && !cursorMoved && (hasGpuCache || hasCpuCache))
+                {
+                    return new CapturedFrame
+                    {
+                        Nv12Data = hasGpuCache ? _nv12Data : null,
+                        RgbaData = hasGpuCache ? null : _reusableRgbaData,
+                        Width = _width,
+                        Height = _height,
+                        TimestampUs = _lastPresentTimeUs,
+                        IsNew = false,
+                        ForceKeyframe = false
+                    };
+                }
+
+                if (hasPt)
+                {
+                    _lastCursorX = pt.X;
+                    _lastCursorY = pt.Y;
+                }
+
+                var cached = CachedFrame();
+                if (cached != null)
+                {
+                    return new CapturedFrame
+                    {
+                        Nv12Data = cached.Nv12Data,
+                        RgbaData = cached.RgbaData,
+                        Width = cached.Width,
+                        Height = cached.Height,
+                        TimestampUs = cached.TimestampUs,
+                        IsNew = _hasVisibleDesktop ? (cursorMoved || cached.IsNew) : cached.IsNew,
+                        ForceKeyframe = cached.ForceKeyframe
+                    };
+                }
+                return null;
             }
 
             if (result.Failure || desktopResource == null)
@@ -383,6 +425,11 @@ public sealed class DxgiScreenCapture : IDisposable
                         }
                     }
 
+                    if (GetCursorPos(out var curPt))
+                    {
+                        _lastCursorX = curPt.X;
+                        _lastCursorY = curPt.Y;
+                    }
                     GdiScreenCapture.DrawCursorOntoBgraBuffer(_reusableRgbaData, _width, _height, _originX, _originY, out _lastCursorRect);
 
                     _hasAnySurface = true;
@@ -533,6 +580,8 @@ public sealed class DxgiScreenCapture : IDisposable
         if (_cursorStaging == null || _desktopCopy == null || _cursorPatchBgra == null || _cursorPatchNv12 == null || _nv12Data == null)
             return;
         if (!GetCursorPos(out var pt)) return;
+        _lastCursorX = pt.X;
+        _lastCursorY = pt.Y;
 
         int patch = (int)_cursorStaging.Description.Width;
         int relX = pt.X - _originX;
