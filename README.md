@@ -1,16 +1,19 @@
 <p align="center">
-  <!-- LOGO_PLACEHOLDER -->
-  <img src="assets/logo.png" alt="Areas Logo" width="160" onerror="this.style.display='none'"/>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="assets/logo-light.svg">
+    <img src="assets/logo.png" alt="Areas Logo" width="280"/>
+  </picture>
   <h1 align="center">Areas — SecondScreen</h1>
   <p align="center">
     <strong>Second monitor solution for Windows using Android tablets.</strong>
   </p>
   <p align="center">
-    <a href="https://dotnet.microsoft.com/"><img src="https://img.shields.io/badge/.NET-8.0-512BD4?logo=dotnet&logoColor=white" alt=".NET 8"/></a>
-    <a href="https://kotlinlang.org/"><img src="https://img.shields.io/badge/Kotlin-2.0-7F52FF?logo=kotlin&logoColor=white" alt="Kotlin"/></a>
-    <a href="https://developer.android.com/"><img src="https://img.shields.io/badge/Android-8.0%2B-3DDC84?logo=android&logoColor=white" alt="Android 8.0+"/></a>
-    <a href="https://github.com/skyfall3215/areas/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-blue.svg" alt="License GPLv3"/></a>
-    <img src="https://img.shields.io/badge/Stream-60%20FPS%20%7C%202.3K-orange" alt="Stream Spec"/>
+    <a href="https://dotnet.microsoft.com/"><img src="https://img.shields.io/badge/.NET-8.0-4DA3F5?logo=dotnet&logoColor=white" alt=".NET 8"/></a>
+    <a href="https://kotlinlang.org/"><img src="https://img.shields.io/badge/Kotlin-2.0-2F6FB5?logo=kotlin&logoColor=white" alt="Kotlin"/></a>
+    <a href="https://developer.android.com/"><img src="https://img.shields.io/badge/Android-8.0%2B-4DA3F5?logo=android&logoColor=white" alt="Android 8.0+"/></a>
+    <a href="https://github.com/skyfall3215/areas/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-0E1B2C.svg" alt="License GPLv3"/></a>
+    <img src="https://img.shields.io/badge/Stream-60%20FPS%20%7C%202.3K-FFB84D" alt="Stream Spec"/>
   </p>
 </p>
 

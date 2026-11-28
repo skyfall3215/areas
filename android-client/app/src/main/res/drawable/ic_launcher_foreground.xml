@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Safe-zone centered Areas Mark (~66% adaptive icon zone) -->
+    <group
+        android:scaleX="0.38"
+        android:scaleY="0.38"
+        android:translateX="24.08"
+        android:translateY="23.51">
+        <group android:translateY="7">
+            <path
+                android:pathData="M 77,102 L 24,102 A 14,14 0 0,1 10,88 L 10,40 A 14,14 0 0,1 24,26 L 108,26 A 14,14 0 0,1 122,40 L 122,63"
+                android:strokeWidth="9"
+                android:strokeColor="#FF6DB6FF"
+                android:strokeLineCap="butt" />
+
+            <path
+                android:fillColor="#FF6DB6FF"
+                android:pathData="M 58,103 H 74 V 117 H 58 Z" />
+
+            <path
+                android:fillColor="#FF6DB6FF"
+                android:pathData="M 46,117 H 86 A 4,4 0 0,1 90,121 A 4,4 0 0,1 86,125 H 46 A 4,4 0 0,1 42,121 A 4,4 0 0,1 46,117 Z" />
+
+            <path
+                android:fillColor="#FF4A8AD6"
+                android:pathData="M 94,70 H 142 A 10,10 0 0,1 152,80 V 103 A 10,10 0 0,1 142,113 H 94 A 10,10 0 0,1 84,103 V 80 A 10,10 0 0,1 94,70 Z" />
+
+            <path
+                android:fillColor="#FFFFC266"
+                android:pathData="M 98,79 L 98,105 L 104,100 L 108,109 L 113,107 L 109,98 L 117,97 Z"
+                android:strokeLineJoin="round" />
+        </group>
+    </group>
+
+</vector>

@@ -1,85 +1,56 @@
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- Deep Midnight-Navy Squircle Backdrop -->
+    <!-- Night Squircle Backdrop -->
     <path
-        android:pathData="M 28,4 L 80,4 C 95,4 104,13 104,28 L 104,80 C 104,95 95,104 80,104 L 28,104 C 13,104 4,95 4,80 L 4,28 C 4,13 13,4 28,4 Z">
-        <aapt:attr name="android:fillColor">
-            <gradient
-                android:centerX="80"
-                android:centerY="24"
-                android:gradientRadius="92"
-                android:type="radial">
-                <item android:color="#FF121C4D" android:offset="0.0" />
-                <item android:color="#FF090F2A" android:offset="0.52" />
-                <item android:color="#FF050714" android:offset="1.0" />
-            </gradient>
-        </aapt:attr>
-    </path>
+        android:fillColor="#FF0A1422"
+        android:pathData="M 28,4 L 80,4 C 95,4 104,13 104,28 L 104,80 C 104,95 95,104 80,104 L 28,104 C 13,104 4,95 4,80 L 4,28 C 4,13 13,4 28,4 Z" />
 
-    <!-- Luminous Indigo-Cyan Squircle Rim -->
+    <!-- Subtle Line Rim -->
     <path
         android:pathData="M 28,4.9 L 80,4.9 C 94.5,4.9 103.1,13.5 103.1,28 L 103.1,80 C 103.1,94.5 94.5,103.1 80,103.1 L 28,103.1 C 13.5,103.1 4.9,94.5 4.9,80 L 4.9,28 C 4.9,13.5 13.5,4.9 28,4.9 Z"
-        android:strokeWidth="1.6">
-        <aapt:attr name="android:strokeColor">
-            <gradient
-                android:endX="98"
-                android:endY="96"
-                android:startX="10"
-                android:startY="12"
-                android:type="linear">
-                <item android:color="#3338BDF8" android:offset="0.0" />
-                <item android:color="#996366F1" android:offset="0.5" />
-                <item android:color="#B38B5CF6" android:offset="1.0" />
-            </gradient>
-        </aapt:attr>
-    </path>
+        android:strokeWidth="1.6"
+        android:strokeColor="#FF1E3350" />
 
-    <!-- Stylized 'A' Arch (White -> Ice Cyan -> Electric Violet) -->
-    <path
-        android:pathData="M 21,67 L 45,28 C 47.5,24 50.8,23 53.5,23 C 56.2,23 59,24.5 61,28 L 88,78 L 74,78 L 53.2,39 C 52.4,37.4 51.2,37.4 50.4,39 L 41.5,53.5 Q 31,59 21,67 Z">
-        <aapt:attr name="android:fillColor">
-            <gradient
-                android:endX="84"
-                android:endY="78"
-                android:startX="44"
-                android:startY="24"
-                android:type="linear">
-                <item android:color="#FFFFFFFF" android:offset="0.0" />
-                <item android:color="#FFBAE6FD" android:offset="0.34" />
-                <item android:color="#FF7C6CF6" android:offset="0.72" />
-                <item android:color="#FFA855F7" android:offset="1.0" />
-            </gradient>
-        </aapt:attr>
-    </path>
+    <!-- Centered Areas Mark (160x160 coordinate space scaled to ~78dp) -->
+    <group
+        android:scaleX="0.4875"
+        android:scaleY="0.4875"
+        android:translateX="15.61"
+        android:translateY="14.88">
+        <group android:translateY="7">
+            <!-- Monitor Frame (maskless equivalent path) -->
+            <path
+                android:pathData="M 77,102 L 24,102 A 14,14 0 0,1 10,88 L 10,40 A 14,14 0 0,1 24,26 L 108,26 A 14,14 0 0,1 122,40 L 122,63"
+                android:strokeWidth="9"
+                android:strokeColor="#FF6DB6FF"
+                android:strokeLineCap="butt" />
 
-    <!-- Subtle Dark Cutout Behind Swoosh Crossing -->
-    <path
-        android:pathData="M 18,78 C 31,57.5 55,42.5 91,40 C 64,48.5 44,61.5 33,78 Z"
-        android:strokeColor="#FF070B1E"
-        android:strokeLineJoin="round"
-        android:strokeWidth="3.2" />
+            <!-- Monitor Stand Neck -->
+            <path
+                android:fillColor="#FF6DB6FF"
+                android:pathData="M 58,103 H 74 V 117 H 58 Z" />
 
-    <!-- Foreground Sweeping Swoosh (Cyan -> Electric Blue -> Indigo) -->
-    <path
-        android:pathData="M 18,78 C 31,57.5 55,42.5 91,40 C 64,48.5 44,61.5 33,78 Z">
-        <aapt:attr name="android:fillColor">
-            <gradient
-                android:endX="90"
-                android:endY="40"
-                android:startX="20"
-                android:startY="78"
-                android:type="linear">
-                <item android:color="#FF22D3EE" android:offset="0.0" />
-                <item android:color="#FF3B82F6" android:offset="0.52" />
-                <item android:color="#FF6366F1" android:offset="1.0" />
-            </gradient>
-        </aapt:attr>
-    </path>
+            <!-- Monitor Stand Base -->
+            <path
+                android:fillColor="#FF6DB6FF"
+                android:pathData="M 46,117 H 86 A 4,4 0 0,1 90,121 A 4,4 0 0,1 86,125 H 46 A 4,4 0 0,1 42,121 A 4,4 0 0,1 46,117 Z" />
+
+            <!-- Tablet Display -->
+            <path
+                android:fillColor="#FF4A8AD6"
+                android:pathData="M 94,70 H 142 A 10,10 0 0,1 152,80 V 103 A 10,10 0 0,1 142,113 H 94 A 10,10 0 0,1 84,103 V 80 A 10,10 0 0,1 94,70 Z" />
+
+            <!-- Amber Cursor Accent -->
+            <path
+                android:fillColor="#FFFFC266"
+                android:pathData="M 98,79 L 98,105 L 104,100 L 108,109 L 113,107 L 109,98 L 117,97 Z"
+                android:strokeLineJoin="round" />
+        </group>
+    </group>
 
 </vector>

@@ -17,6 +17,32 @@ public sealed class ServerDashboardForm : Form
         Turkish
     }
 
+    // Areas Brand Palette (Dark Night / Sky / Signal Amber)
+    private static readonly Color BgCanvas = Color.FromArgb(10, 20, 34);           // #0A1422
+    private static readonly Color SurfaceCard = Color.FromArgb(14, 27, 44);        // #0E1B2C
+    private static readonly Color SurfaceElevated = Color.FromArgb(19, 35, 58);    // #13233A
+    private static readonly Color SurfaceSmallBtn = Color.FromArgb(21, 38, 61);    // #15263D
+    private static readonly Color HoverFill = Color.FromArgb(42, 74, 112);         // #2A4A70
+    private static readonly Color BorderLine = Color.FromArgb(30, 51, 80);         // #1E3350
+    private static readonly Color SkyPrimary = Color.FromArgb(109, 182, 255);      // #6DB6FF
+    private static readonly Color SkyAccent = Color.FromArgb(77, 163, 245);        // #4DA3F5
+    private static readonly Color DeepSky = Color.FromArgb(47, 111, 181);          // #2F6FB5
+    private static readonly Color DeepSkySoft = Color.FromArgb(191, 217, 242);     // #BFD9F2
+    private static readonly Color AmberSignal = Color.FromArgb(255, 194, 102);     // #FFC266
+    private static readonly Color TextPrimary = Color.FromArgb(234, 243, 252);     // #EAF3FC
+    private static readonly Color TextMuted = Color.FromArgb(140, 161, 186);       // #8CA1BA
+    private static readonly Color LogBg = Color.FromArgb(7, 16, 28);               // #07101C
+    private static readonly Color DangerFill = Color.FromArgb(220, 38, 38);        // #DC2626
+    private static readonly Color DangerHover = Color.FromArgb(239, 68, 68);       // #EF4444
+    private static readonly Color DangerText = Color.FromArgb(248, 113, 113);      // #F87171
+    private static readonly Color EmeraldOk = Color.FromArgb(52, 211, 153);        // #34D399
+
+    private const int DwmwaUseImmersiveDarkMode = 20;
+    private const int DwmwaCaptionColor = 35;
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
+
     private readonly SecondScreenServer _server = new();
     private readonly NotifyIcon _trayIcon = new();
     private readonly ContextMenuStrip _trayMenu = new();
@@ -30,7 +56,7 @@ public sealed class ServerDashboardForm : Form
     private Button _btnToggleServer = null!;
     private Button _btnExtendDesktop = null!;
     private Button _btnStopwatch = null!;
-    
+
     // Cards
     private Label _lblConnCardTitle = null!;
     private Label _lblDispCardTitle = null!;
@@ -66,10 +92,35 @@ public sealed class ServerDashboardForm : Form
 
     public ServerDashboardForm()
     {
+        DoubleBuffered = true;
+        SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint, true);
         InitializeCustomForm();
         SetupSystemTray();
         HookServerEvents();
         SetLanguage(AppLanguage.English); // English by default
+    }
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        ApplyDarkTitleBar();
+    }
+
+    private void ApplyDarkTitleBar()
+    {
+        try
+        {
+            int useDarkMode = 1;
+            _ = DwmSetWindowAttribute(Handle, DwmwaUseImmersiveDarkMode, ref useDarkMode, sizeof(int));
+
+            // COLORREF is 0x00BBGGRR -> #0A1422 = 0x0022140A
+            int captionColor = (BgCanvas.B << 16) | (BgCanvas.G << 8) | BgCanvas.R;
+            _ = DwmSetWindowAttribute(Handle, DwmwaCaptionColor, ref captionColor, sizeof(int));
+        }
+        catch
+        {
+            // Ignore on Windows versions that do not support these DWM attributes.
+        }
     }
 
     private void InitializeCustomForm()
@@ -78,8 +129,8 @@ public sealed class ServerDashboardForm : Form
         Size = new Size(950, 790);
         MinimumSize = new Size(920, 750);
         StartPosition = FormStartPosition.CenterScreen;
-        BackColor = Color.FromArgb(20, 20, 26);
-        ForeColor = Color.FromArgb(240, 240, 245);
+        BackColor = BgCanvas;
+        ForeColor = TextPrimary;
         Font = new Font("Segoe UI", 9.5f, FontStyle.Regular);
 
         string? icoPath = ResolveAssetPath("app.ico", "areas.ico");
@@ -92,7 +143,7 @@ public sealed class ServerDashboardForm : Form
             ColumnCount = 1,
             RowCount = 6,
             Padding = new Padding(16, 12, 16, 12),
-            BackColor = Color.Transparent
+            BackColor = BgCanvas
         };
         pnlMain.RowStyles.Add(new RowStyle(SizeType.Absolute, 65));  // 0: Header
         pnlMain.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));  // 1: Language Tabs Bar
@@ -102,8 +153,8 @@ public sealed class ServerDashboardForm : Form
         pnlMain.RowStyles.Add(new RowStyle(SizeType.Percent, 100));  // 5: Event Logs (Fills remaining height)
 
         // 0. Header (Logo, Titles, Status Badge)
-        var pnlHeader = new Panel { Dock = DockStyle.Fill };
-        
+        var pnlHeader = new Panel { Dock = DockStyle.Fill, BackColor = BgCanvas };
+
         string? logoPath = ResolveAssetPath(Path.Combine("assets", "logo.png"), "logo.png");
         if (logoPath != null)
         {
@@ -112,7 +163,8 @@ public sealed class ServerDashboardForm : Form
                 Image = Image.FromFile(logoPath),
                 SizeMode = PictureBoxSizeMode.Zoom,
                 Size = new Size(50, 50),
-                Location = new Point(0, 6)
+                Location = new Point(0, 6),
+                BackColor = Color.Transparent
             };
             pnlHeader.Controls.Add(pbLogo);
         }
@@ -121,7 +173,8 @@ public sealed class ServerDashboardForm : Form
         {
             Text = "Areas Server",
             Font = new Font("Segoe UI", 16f, FontStyle.Bold),
-            ForeColor = Color.White,
+            ForeColor = TextPrimary,
+            BackColor = Color.Transparent,
             Location = new Point(58, 6),
             AutoSize = true
         };
@@ -131,23 +184,24 @@ public sealed class ServerDashboardForm : Form
         {
             Text = "Second monitor solution for Windows using Android tablets.",
             Font = new Font("Segoe UI", 9f, FontStyle.Regular),
-            ForeColor = Color.FromArgb(150, 150, 165),
+            ForeColor = TextMuted,
+            BackColor = Color.Transparent,
             Location = new Point(60, 36),
             AutoSize = true,
             UseMnemonic = false
         };
         pnlHeader.Controls.Add(_lblSubtitle);
 
-        _lblStatusBadge = new Label
+        _lblStatusBadge = new PillLabel
         {
             Text = "● Listening (Port 27183)",
             Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
-            ForeColor = Color.FromArgb(34, 197, 94),
-            BackColor = Color.FromArgb(30, 41, 59),
+            ForeColor = EmeraldOk,
+            BackColor = SurfaceElevated,
             TextAlign = ContentAlignment.MiddleCenter,
             AutoSize = true,
             MinimumSize = new Size(210, 34),
-            Padding = new Padding(12, 6, 12, 6),
+            Padding = new Padding(14, 6, 14, 6),
             Dock = DockStyle.Right,
             Margin = new Padding(0, 10, 0, 10),
             UseMnemonic = false
@@ -160,6 +214,7 @@ public sealed class ServerDashboardForm : Form
         {
             Dock = DockStyle.Fill,
             FlowDirection = FlowDirection.LeftToRight,
+            BackColor = BgCanvas,
             Margin = new Padding(0, 2, 0, 4)
         };
 
@@ -175,14 +230,15 @@ public sealed class ServerDashboardForm : Form
             Dock = DockStyle.Fill,
             FlowDirection = FlowDirection.LeftToRight,
             WrapContents = false,
+            BackColor = BgCanvas,
             Margin = new Padding(0, 2, 0, 6)
         };
 
-        _btnToggleServer = CreateButton("⏹ Stop Server", Color.FromArgb(239, 68, 68), Color.White);
+        _btnToggleServer = CreateButton("⏹ Stop Server", DangerFill, TextPrimary, DangerHover, DangerHover);
         _btnToggleServer.Click += async (_, _) => await ToggleServerAsync();
         pnlControls.Controls.Add(_btnToggleServer);
 
-        _btnExtendDesktop = CreateButton("🖥️ Extend Desktop", Color.FromArgb(39, 39, 46), Color.White);
+        _btnExtendDesktop = CreateButton("🖥️ Extend Desktop", SurfaceElevated, TextPrimary, HoverFill, BorderLine);
         _btnExtendDesktop.Click += async (_, _) =>
         {
             try
@@ -199,7 +255,7 @@ public sealed class ServerDashboardForm : Form
         };
         pnlControls.Controls.Add(_btnExtendDesktop);
 
-        _btnStopwatch = CreateButton("⏱️ Stopwatch (Latency Test)", Color.FromArgb(39, 39, 46), Color.White);
+        _btnStopwatch = CreateButton("⏱️ Stopwatch (Latency Test)", SurfaceElevated, TextPrimary, HoverFill, BorderLine);
         _btnStopwatch.Click += (_, _) =>
         {
             LatencyStopwatchForm.ShowInThread();
@@ -215,6 +271,7 @@ public sealed class ServerDashboardForm : Form
             Dock = DockStyle.Fill,
             ColumnCount = 2,
             RowCount = 1,
+            BackColor = BgCanvas,
             Margin = new Padding(0)
         };
         pnlMiddle.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
@@ -229,7 +286,8 @@ public sealed class ServerDashboardForm : Form
         {
             Text = $"• Security PIN: {_server.CurrentPin} (TLS Encrypted)",
             Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
-            ForeColor = Color.FromArgb(34, 197, 94),
+            ForeColor = AmberSignal,
+            BackColor = SurfaceCard,
             AutoSize = true,
             Margin = new Padding(0, 4, 0, 2)
         };
@@ -237,7 +295,8 @@ public sealed class ServerDashboardForm : Form
         {
             Text = "Require PIN",
             Checked = _server.RequirePin,
-            ForeColor = Color.FromArgb(220, 220, 235),
+            ForeColor = TextPrimary,
+            BackColor = SurfaceCard,
             AutoSize = true,
             Margin = new Padding(4, 6, 8, 0)
         };
@@ -266,6 +325,7 @@ public sealed class ServerDashboardForm : Form
             WrapContents = true,
             AutoSize = true,
             MaximumSize = new Size(410, 0),
+            BackColor = SurfaceCard,
             Margin = new Padding(0, 6, 0, 0)
         };
         pnlConnButtons.Controls.Add(_btnRefreshUsb);
@@ -279,7 +339,7 @@ public sealed class ServerDashboardForm : Form
         var pnlDispCard = CreateCardPanel("🖥️ Virtual Display Driver (IddCx)", out _lblDispCardTitle);
         _lblVirtualDisplayStatus = CreateInfoLabel("• Virtual Display: Checking...");
         _lblVirtualDisplayStatus.MaximumSize = new Size(390, 0);
-        
+
         _btnInstallDriver = CreateSmallButton("Install Driver", async (_, _) =>
         {
             AddLog(_currentLanguage == AppLanguage.English ? "[+] Installing virtual display driver..." : "[+] Sanal ekran sürücüsü kuruluyor...");
@@ -317,6 +377,7 @@ public sealed class ServerDashboardForm : Form
             WrapContents = true,
             AutoSize = true,
             MaximumSize = new Size(410, 0),
+            BackColor = SurfaceCard,
             Margin = new Padding(0, 8, 0, 0)
         };
         pnlDispButtons.Controls.Add(_btnInstallDriver);
@@ -328,11 +389,11 @@ public sealed class ServerDashboardForm : Form
         pnlMain.Controls.Add(pnlMiddle, 0, 3);
 
         // 4. Live Session Telemetry Card (Dedicated non-clipping Panel)
-        var pnlTelemetryCard = new Panel
+        var pnlTelemetryCard = new RoundedCardPanel
         {
             Dock = DockStyle.Fill,
-            BackColor = Color.FromArgb(28, 28, 36),
-            Padding = new Padding(12, 10, 12, 10),
+            BackColor = SurfaceCard,
+            Padding = new Padding(14, 10, 14, 10),
             Margin = new Padding(4)
         };
 
@@ -340,7 +401,8 @@ public sealed class ServerDashboardForm : Form
         {
             Text = "📊 Active Session & Live Telemetry",
             Font = new Font("Segoe UI", 10.5f, FontStyle.Bold),
-            ForeColor = Color.FromArgb(167, 139, 250),
+            ForeColor = SkyPrimary,
+            BackColor = SurfaceCard,
             Dock = DockStyle.Top,
             Height = 26,
             UseMnemonic = false
@@ -360,11 +422,11 @@ public sealed class ServerDashboardForm : Form
         pnlMain.Controls.Add(pnlTelemetryCard, 0, 4);
 
         // 5. Live Logs Card (Panel container with header and clean inner padding)
-        var pnlLogsCard = new Panel
+        var pnlLogsCard = new RoundedCardPanel
         {
             Dock = DockStyle.Fill,
-            BackColor = Color.FromArgb(28, 28, 36),
-            Padding = new Padding(12, 10, 12, 10),
+            BackColor = SurfaceCard,
+            Padding = new Padding(14, 10, 14, 12),
             Margin = new Padding(4)
         };
 
@@ -372,22 +434,31 @@ public sealed class ServerDashboardForm : Form
         {
             Text = "📜 Event Logs",
             Font = new Font("Segoe UI", 10.5f, FontStyle.Bold),
-            ForeColor = Color.FromArgb(167, 139, 250),
+            ForeColor = SkyPrimary,
+            BackColor = SurfaceCard,
             Dock = DockStyle.Top,
             Height = 26
+        };
+
+        var pnlLogFrame = new Panel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = BorderLine,
+            Padding = new Padding(1)
         };
 
         _rtbLogs = new RichTextBox
         {
             Dock = DockStyle.Fill,
-            BackColor = Color.FromArgb(14, 14, 18),
-            ForeColor = Color.FromArgb(200, 200, 215),
+            BackColor = LogBg,
+            ForeColor = DeepSkySoft,
             Font = new Font("Consolas", 9f),
             ReadOnly = true,
             BorderStyle = BorderStyle.None
         };
 
-        pnlLogsCard.Controls.Add(_rtbLogs);
+        pnlLogFrame.Controls.Add(_rtbLogs);
+        pnlLogsCard.Controls.Add(pnlLogFrame);
         pnlLogsCard.Controls.Add(_lblLogsTitle);
         pnlMain.Controls.Add(pnlLogsCard, 0, 5);
 
@@ -404,10 +475,8 @@ public sealed class ServerDashboardForm : Form
         bool isEn = lang == AppLanguage.English;
 
         // Tabs styling
-        _btnTabEn.BackColor = isEn ? Color.FromArgb(99, 102, 241) : Color.FromArgb(32, 32, 42);
-        _btnTabEn.ForeColor = isEn ? Color.White : Color.FromArgb(160, 160, 175);
-        _btnTabTr.BackColor = !isEn ? Color.FromArgb(99, 102, 241) : Color.FromArgb(32, 32, 42);
-        _btnTabTr.ForeColor = !isEn ? Color.White : Color.FromArgb(160, 160, 175);
+        StyleTabButton(_btnTabEn, isEn);
+        StyleTabButton(_btnTabTr, !isEn);
 
         // Subtitle
         _lblSubtitle.Text = isEn
@@ -464,7 +533,11 @@ public sealed class ServerDashboardForm : Form
             ? (isEn ? "⏹ Stop Server" : "⏹ Sunucuyu Durdur")
             : (isEn ? "▶ Start Server" : "▶ Sunucuyu Başlat");
         _btnToggleServer.Text = toggleText;
-        _btnToggleServer.BackColor = isRunning ? Color.FromArgb(239, 68, 68) : Color.FromArgb(37, 99, 235);
+        _btnToggleServer.BackColor = isRunning ? DangerFill : DeepSky;
+        _btnToggleServer.FlatAppearance.BorderColor = isRunning ? DangerHover : SkyAccent;
+        if (_btnToggleServer is RoundedButton toggleBtn)
+            toggleBtn.HoverColor = isRunning ? DangerHover : SkyAccent;
+
         if (_itemToggleServer != null) _itemToggleServer.Text = toggleText;
 
         if (isRunning)
@@ -474,20 +547,20 @@ public sealed class ServerDashboardForm : Form
                 _lblStatusBadge.Text = isEn
                     ? $"● Connected: {_server.ConnectedClientName}"
                     : $"● Bağlı: {_server.ConnectedClientName}";
-                _lblStatusBadge.ForeColor = Color.FromArgb(59, 130, 246);
+                _lblStatusBadge.ForeColor = SkyPrimary;
             }
             else
             {
                 _lblStatusBadge.Text = isEn
                     ? $"● Listening (Port {_server.Port})"
                     : $"● Dinliyor (Port {_server.Port})";
-                _lblStatusBadge.ForeColor = Color.FromArgb(34, 197, 94);
+                _lblStatusBadge.ForeColor = EmeraldOk;
             }
         }
         else
         {
             _lblStatusBadge.Text = isEn ? "● Stopped" : "● Durduruldu";
-            _lblStatusBadge.ForeColor = Color.FromArgb(239, 68, 68);
+            _lblStatusBadge.ForeColor = DangerText;
         }
     }
 
@@ -528,21 +601,21 @@ public sealed class ServerDashboardForm : Form
         {
             string dispWord = isEn ? "Second Display" : "İkinci Ekran";
             _lblVirtualDisplayStatus.Text = $"• {dispWord}: {secondDisp.FriendlyName} ({secondDisp.Bounds.Width}x{secondDisp.Bounds.Height} at {secondDisp.Bounds.X},{secondDisp.Bounds.Y})";
-            _lblVirtualDisplayStatus.ForeColor = Color.FromArgb(34, 197, 94);
+            _lblVirtualDisplayStatus.ForeColor = EmeraldOk;
         }
         else if (SecondScreenServer.IsVirtualDisplayInstalled())
         {
             _lblVirtualDisplayStatus.Text = isEn
                 ? "• Driver: Installed (Active) | Desktop: Single Screen (Click 'Extend Desktop')"
                 : "• Sürücü: Kurulu (Aktif) | Masaüstü: Tek Ekran ('Genişlet'e basın)";
-            _lblVirtualDisplayStatus.ForeColor = Color.FromArgb(245, 158, 11);
+            _lblVirtualDisplayStatus.ForeColor = AmberSignal;
         }
         else
         {
             _lblVirtualDisplayStatus.Text = isEn
                 ? "• Virtual Display Driver: Not Installed (Click 'Install Driver')"
                 : "• Sanal Ekran Sürücüsü: Kurulu Değil (Sürücüyü Kur butonuna basın)";
-            _lblVirtualDisplayStatus.ForeColor = Color.FromArgb(239, 68, 68);
+            _lblVirtualDisplayStatus.ForeColor = DangerText;
         }
     }
 
@@ -563,6 +636,7 @@ public sealed class ServerDashboardForm : Form
             _lblSessionStats.Text = isEn
                 ? "• Stream Specs: 2304x1440 @ 60 FPS | Latency (RTT): -- ms | Bitrate: -- Mbps"
                 : "• Akış Özellikleri: 2304x1440 @ 60 FPS | Gecikme (RTT): -- ms | Bitrate: -- Mbps";
+            _lblSessionStats.ForeColor = TextPrimary;
         }
     }
 
@@ -608,8 +682,8 @@ public sealed class ServerDashboardForm : Form
         {
             e.Cancel = true;
             Hide();
-            _trayIcon.ShowBalloonTip(2000, "Areas Server", 
-                _currentLanguage == AppLanguage.English ? "Running in background (System Tray)." : "Arka planda çalışmaya devam ediyor.", 
+            _trayIcon.ShowBalloonTip(2000, "Areas Server",
+                _currentLanguage == AppLanguage.English ? "Running in background (System Tray)." : "Arka planda çalışmaya devam ediyor.",
                 ToolTipIcon.Info);
         }
         else
@@ -672,10 +746,10 @@ public sealed class ServerDashboardForm : Form
         string streamWord = isEn ? "Stream" : "Akış";
         string rttWord = isEn ? "Network Latency" : "Ağ Gecikmesi";
         string oneWayWord = isEn ? "One-way" : "Tek Yön";
-        _lblSessionStats.Text = $"• {streamWord}: 2304x1440 @ {fps:F0} FPS | {rttWord}: {rttMs:F1} ms ({oneWayWord}: {rttMs/2.0:F1} ms) | Bitrate: {bitrateMbps:F1} Mbps | Encoder: {_server.ActiveEncoderLabel}";
+        _lblSessionStats.Text = $"• {streamWord}: 2304x1440 @ {fps:F0} FPS | {rttWord}: {rttMs:F1} ms ({oneWayWord}: {rttMs / 2.0:F1} ms) | Bitrate: {bitrateMbps:F1} Mbps | Encoder: {_server.ActiveEncoderLabel}";
         _lblSessionStats.ForeColor = _server.IsHardwareEncoderActive
-            ? Color.FromArgb(34, 197, 94)
-            : Color.FromArgb(245, 158, 11);
+            ? EmeraldOk
+            : AmberSignal;
     }
 
     private void AddLog(string msg)
@@ -688,13 +762,13 @@ public sealed class ServerDashboardForm : Form
 
     private static FlowLayoutPanel CreateCardPanel(string title, out Label titleLabel)
     {
-        var pnl = new FlowLayoutPanel
+        var pnl = new RoundedCardFlowPanel
         {
             Dock = DockStyle.Fill,
             FlowDirection = FlowDirection.TopDown,
             WrapContents = false,
-            BackColor = Color.FromArgb(28, 28, 36),
-            Padding = new Padding(12),
+            BackColor = SurfaceCard,
+            Padding = new Padding(14, 12, 14, 12),
             Margin = new Padding(4)
         };
 
@@ -702,7 +776,8 @@ public sealed class ServerDashboardForm : Form
         {
             Text = title,
             Font = new Font("Segoe UI", 10.5f, FontStyle.Bold),
-            ForeColor = Color.FromArgb(167, 139, 250),
+            ForeColor = SkyPrimary,
+            BackColor = SurfaceCard,
             AutoSize = true,
             Margin = new Padding(0, 0, 0, 8),
             UseMnemonic = false
@@ -717,20 +792,23 @@ public sealed class ServerDashboardForm : Form
         {
             Text = text,
             Font = new Font("Segoe UI", 9.5f),
-            ForeColor = Color.FromArgb(220, 220, 230),
+            ForeColor = TextPrimary,
+            BackColor = SurfaceCard,
             AutoSize = true,
             Margin = new Padding(0, 2, 0, 2),
             UseMnemonic = false
         };
     }
 
-    private static Button CreateButton(string text, Color bg, Color fg)
+    private static Button CreateButton(string text, Color bg, Color fg, Color hoverBg, Color borderColor)
     {
-        var btn = new Button
+        var btn = new RoundedButton
         {
             Text = text,
             BackColor = bg,
             ForeColor = fg,
+            HoverColor = hoverBg,
+            CornerRadius = 8,
             FlatStyle = FlatStyle.Flat,
             Font = new Font("Segoe UI", 9.5f, FontStyle.Bold),
             AutoSize = true,
@@ -741,17 +819,20 @@ public sealed class ServerDashboardForm : Form
             Cursor = Cursors.Hand,
             Margin = new Padding(0, 0, 8, 0)
         };
-        btn.FlatAppearance.BorderSize = 0;
+        btn.FlatAppearance.BorderSize = 1;
+        btn.FlatAppearance.BorderColor = borderColor;
         return btn;
     }
 
     private static Button CreateSmallButton(string text, EventHandler onClick)
     {
-        var btn = new Button
+        var btn = new RoundedButton
         {
             Text = text,
-            BackColor = Color.FromArgb(45, 45, 58),
-            ForeColor = Color.White,
+            BackColor = SurfaceSmallBtn,
+            ForeColor = TextPrimary,
+            HoverColor = HoverFill,
+            CornerRadius = 6,
             FlatStyle = FlatStyle.Flat,
             Font = new Font("Segoe UI", 8.5f),
             AutoSize = true,
@@ -759,27 +840,37 @@ public sealed class ServerDashboardForm : Form
             Cursor = Cursors.Hand,
             Margin = new Padding(0, 0, 6, 4)
         };
-        btn.FlatAppearance.BorderColor = Color.FromArgb(70, 70, 90);
+        btn.FlatAppearance.BorderSize = 1;
+        btn.FlatAppearance.BorderColor = BorderLine;
         btn.Click += onClick;
         return btn;
     }
 
     private static Button CreateTabButton(string text, bool isActive, EventHandler onClick)
     {
-        var btn = new Button
+        var btn = new RoundedButton
         {
             Text = text,
-            BackColor = isActive ? Color.FromArgb(99, 102, 241) : Color.FromArgb(32, 32, 42),
-            ForeColor = isActive ? Color.White : Color.FromArgb(160, 160, 175),
+            CornerRadius = 7,
             FlatStyle = FlatStyle.Flat,
             Font = new Font("Segoe UI", 9f, FontStyle.Bold),
             Size = new Size(110, 30),
             Cursor = Cursors.Hand,
             Margin = new Padding(0, 0, 6, 0)
         };
-        btn.FlatAppearance.BorderSize = 0;
+        StyleTabButton(btn, isActive);
         btn.Click += onClick;
         return btn;
+    }
+
+    private static void StyleTabButton(Button btn, bool isActive)
+    {
+        btn.BackColor = isActive ? DeepSky : SurfaceCard;
+        btn.ForeColor = isActive ? TextPrimary : TextMuted;
+        btn.FlatAppearance.BorderSize = 1;
+        btn.FlatAppearance.BorderColor = isActive ? SkyAccent : BorderLine;
+        if (btn is RoundedButton roundedBtn)
+            roundedBtn.HoverColor = isActive ? SkyAccent : HoverFill;
     }
 
     private static string? ResolveAssetPath(params string[] relativePaths)
@@ -795,5 +886,161 @@ public sealed class ServerDashboardForm : Form
             }
         }
         return null;
+    }
+
+    private static GraphicsPath CreateRoundedRectPath(Rectangle rect, int radius)
+    {
+        var path = new GraphicsPath();
+        int diameter = Math.Max(1, Math.Min(radius * 2, Math.Min(rect.Width, rect.Height)));
+        var arc = new Rectangle(rect.Location, new Size(diameter, diameter));
+
+        path.AddArc(arc, 180, 90);
+        arc.X = rect.Right - diameter;
+        path.AddArc(arc, 270, 90);
+        arc.Y = rect.Bottom - diameter;
+        path.AddArc(arc, 0, 90);
+        arc.X = rect.Left;
+        path.AddArc(arc, 90, 90);
+        path.CloseFigure();
+        return path;
+    }
+
+    private static void PaintRoundedSurface(Graphics graphics, Rectangle bounds, int radius, Color outerBg, Color fillColor, Color borderColor)
+    {
+        graphics.Clear(outerBg);
+        if (bounds.Width <= 2 || bounds.Height <= 2) return;
+
+        graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        var rect = new Rectangle(0, 0, bounds.Width - 1, bounds.Height - 1);
+        using var path = CreateRoundedRectPath(rect, radius);
+        using var fillBrush = new SolidBrush(fillColor);
+        using var borderPen = new Pen(borderColor, 1f);
+        graphics.FillPath(fillBrush, path);
+        graphics.DrawPath(borderPen, path);
+    }
+
+    private sealed class RoundedCardPanel : Panel
+    {
+        public RoundedCardPanel()
+        {
+            DoubleBuffered = true;
+            ResizeRedraw = true;
+        }
+
+        protected override void OnPaintBackground(PaintEventArgs e)
+        {
+            PaintRoundedSurface(e.Graphics, ClientRectangle, 10, BgCanvas, BackColor, BorderLine);
+        }
+    }
+
+    private sealed class RoundedCardFlowPanel : FlowLayoutPanel
+    {
+        public RoundedCardFlowPanel()
+        {
+            DoubleBuffered = true;
+            ResizeRedraw = true;
+        }
+
+        protected override void OnPaintBackground(PaintEventArgs e)
+        {
+            PaintRoundedSurface(e.Graphics, ClientRectangle, 10, BgCanvas, BackColor, BorderLine);
+        }
+    }
+
+    private sealed class PillLabel : Label
+    {
+        public PillLabel()
+        {
+            DoubleBuffered = true;
+            ResizeRedraw = true;
+        }
+
+        protected override void OnPaintBackground(PaintEventArgs e)
+        {
+            e.Graphics.Clear(Parent?.BackColor ?? BgCanvas);
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            int radius = Math.Max(10, (Height - 1) / 2);
+            PaintRoundedSurface(e.Graphics, ClientRectangle, radius, Parent?.BackColor ?? BgCanvas, BackColor, BorderLine);
+            TextRenderer.DrawText(
+                e.Graphics,
+                Text,
+                Font,
+                ClientRectangle,
+                ForeColor,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+        }
+    }
+
+    private sealed class RoundedButton : Button
+    {
+        private bool _isHovered;
+        private bool _isPressed;
+
+        public Color HoverColor { get; set; } = HoverFill;
+        public int CornerRadius { get; set; } = 8;
+
+        public RoundedButton()
+        {
+            DoubleBuffered = true;
+            ResizeRedraw = true;
+            SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
+        }
+
+        protected override void OnMouseEnter(EventArgs e)
+        {
+            base.OnMouseEnter(e);
+            _isHovered = true;
+            Invalidate();
+        }
+
+        protected override void OnMouseLeave(EventArgs e)
+        {
+            base.OnMouseLeave(e);
+            _isHovered = false;
+            _isPressed = false;
+            Invalidate();
+        }
+
+        protected override void OnMouseDown(MouseEventArgs mevent)
+        {
+            base.OnMouseDown(mevent);
+            if (mevent.Button == MouseButtons.Left)
+            {
+                _isPressed = true;
+                Invalidate();
+            }
+        }
+
+        protected override void OnMouseUp(MouseEventArgs mevent)
+        {
+            base.OnMouseUp(mevent);
+            _isPressed = false;
+            Invalidate();
+        }
+
+        protected override void OnPaintBackground(PaintEventArgs pevent)
+        {
+            pevent.Graphics.Clear(Parent?.BackColor ?? BgCanvas);
+        }
+
+        protected override void OnPaint(PaintEventArgs pevent)
+        {
+            Color fill = _isPressed
+                ? ControlPaint.Dark(HoverColor, 0.08f)
+                : (_isHovered ? HoverColor : BackColor);
+            Color border = FlatAppearance.BorderSize > 0 ? FlatAppearance.BorderColor : fill;
+
+            PaintRoundedSurface(pevent.Graphics, ClientRectangle, CornerRadius, Parent?.BackColor ?? BgCanvas, fill, border);
+            TextRenderer.DrawText(
+                pevent.Graphics,
+                Text,
+                Font,
+                ClientRectangle,
+                ForeColor,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+        }
     }
 }
